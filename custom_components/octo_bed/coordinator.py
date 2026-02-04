@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import timedelta
 from typing import Any
 
 from bleak import BleakClient
@@ -26,6 +27,7 @@ from .const import (
     CMD_STOP,
     DEFAULT_FEET_CALIBRATION_SEC,
     DEFAULT_HEAD_CALIBRATION_SEC,
+    KEEP_ALIVE_INTERVAL_SEC,
     KEEP_ALIVE_PREFIX,
     KEEP_ALIVE_SUFFIX,
     WRITE_TIMEOUT,
@@ -53,7 +55,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             _LOGGER,
             name=entry.title,
-            update_interval=None,
+            update_interval=timedelta(seconds=60),
         )
         self._entry = entry
         self._device_address: str | None = entry.data.get("device_address")
@@ -70,14 +72,25 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._light_on = False
         self._movement_active = False
         self._cancel_discovery: Any = None
+        self._keep_alive_task: asyncio.Task[None] | None = None
+        # Calibration: 0=idle, 1=head, 2=feet
+        self._calibration_mode = 0
+        self._calibration_start_time: float = 0.0
+        self._calibration_task: asyncio.Task[None] | None = None
+        self._calibration_active = False
 
     @property
     def device_address(self) -> str | None:
-        return self._device_address
+        """Configured MAC from entry, or discovered address."""
+        return self._entry.data.get("device_address") or self._device_address
 
     @property
     def device_name(self) -> str:
         return self._device_name
+
+    @property
+    def pin(self) -> str:
+        return self._entry.data.get("pin", self._pin)
 
     @property
     def head_position(self) -> float:
@@ -97,11 +110,19 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def head_calibration_ms(self) -> int:
-        return self._head_calibration_ms
+        sec = self._entry.options.get(
+            "head_calibration_seconds",
+            self._entry.data.get("head_calibration_seconds", DEFAULT_HEAD_CALIBRATION_SEC),
+        )
+        return max(1000, min(120000, int(float(sec) * 1000)))
 
     @property
     def feet_calibration_ms(self) -> int:
-        return self._feet_calibration_ms
+        sec = self._entry.options.get(
+            "feet_calibration_seconds",
+            self._entry.data.get("feet_calibration_seconds", DEFAULT_FEET_CALIBRATION_SEC),
+        )
+        return max(1000, min(120000, int(float(sec) * 1000)))
 
     def set_head_position(self, value: float) -> None:
         self._head_position = max(0.0, min(100.0, value))
@@ -121,31 +142,46 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if feet_sec is not None:
             self._feet_calibration_ms = max(1000, min(120000, int(feet_sec * 1000)))
 
+    @property
+    def calibration_active(self) -> bool:
+        return self._calibration_active
+
     def _data(self) -> dict[str, Any]:
+        addr = self.device_address
+        connected = (
+            addr is not None
+            and bluetooth.async_address_present(
+                self.hass, addr, connectable=True
+            )
+        )
         return {
             "head_position": self._head_position,
             "feet_position": self._feet_position,
             "light_on": self._light_on,
             "movement_active": self._movement_active,
-            "device_address": self._device_address,
-            "available": self._device_address is not None,
+            "device_address": addr,
+            "available": addr is not None,
+            "connected": connected,
+            "calibration_active": self._calibration_active,
         }
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Ensure we have a device address (from discovery if needed)."""
-        if self._device_address:
-            if bluetooth.async_address_present(self.hass, self._device_address, connectable=True):
+        addr = self.device_address
+        if addr:
+            if bluetooth.async_address_present(self.hass, addr, connectable=True):
                 return self._data()
-            _LOGGER.debug("Device %s not present, will retry discovery", self._device_address)
+            _LOGGER.debug("Device %s not present, will retry discovery", addr)
         await self._async_ensure_address()
         return self._data()
 
     async def _async_ensure_address(self) -> None:
         """Resolve device address from config or discovery."""
-        if self._device_address:
-            if bluetooth.async_address_present(self.hass, self._device_address, connectable=True):
+        addr = self.device_address
+        if addr:
+            if bluetooth.async_address_present(self.hass, addr, connectable=True):
                 return
-            _LOGGER.warning("Configured address %s not seen by any Bluetooth adapter", self._device_address)
+            _LOGGER.warning("Configured address %s not seen by any Bluetooth adapter", addr)
         # Discover by name
         infos = bluetooth.async_discovered_service_info(self.hass, connectable=True)
         for info in infos:
@@ -157,17 +193,18 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _get_ble_device(self):
         """Get BLEDevice for current address (from Bluetooth Proxy or local adapter)."""
-        if not self._device_address:
+        addr = self.device_address
+        if not addr:
             return None
         return bluetooth.async_ble_device_from_address(
-            self.hass, self._device_address, connectable=True
+            self.hass, addr, connectable=True
         )
 
     async def _send_command(self, data: bytes) -> bool:
         """Connect to device (via proxy) and write command. Returns True on success."""
         ble_device = self._get_ble_device()
         if not ble_device:
-            _LOGGER.warning("No BLE device available for Octo Bed (address: %s)", self._device_address)
+            _LOGGER.warning("No BLE device available for Octo Bed (address: %s)", self.device_address)
             return False
         try:
             async with BleakClient(
@@ -203,6 +240,60 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_send_both_down(self) -> bool:
         return await self._send_command(CMD_BOTH_DOWN)
 
+    async def async_set_head_position(self, position: float) -> bool:
+        """Move head to 0-100%% (like cover set_position). Returns True if command accepted."""
+        position = max(0.0, min(100.0, position))
+        current = self._head_position
+        if abs(position - current) < 0.5:
+            return True
+        self.set_movement_active(True)
+        diff = abs(position - current)
+        duration_ms = int((diff / 100.0) * self._head_calibration_ms)
+        duration_ms = max(300, min(self._head_calibration_ms, duration_ms))
+        loop = self.hass.loop
+        end_ts = loop.time() + duration_ms / 1000.0
+        try:
+            if position > current:
+                while loop.time() < end_ts:
+                    await self.async_send_head_up()
+                    await asyncio.sleep(0.3)
+            else:
+                while loop.time() < end_ts:
+                    await self.async_send_head_down()
+                    await asyncio.sleep(0.3)
+        finally:
+            await self.async_send_stop()
+        self.set_head_position(position)
+        self.set_movement_active(False)
+        return True
+
+    async def async_set_feet_position(self, position: float) -> bool:
+        """Move feet to 0-100%% (like cover set_position). Returns True if command accepted."""
+        position = max(0.0, min(100.0, position))
+        current = self._feet_position
+        if abs(position - current) < 0.5:
+            return True
+        self.set_movement_active(True)
+        diff = abs(position - current)
+        duration_ms = int((diff / 100.0) * self._feet_calibration_ms)
+        duration_ms = max(300, min(self._feet_calibration_ms, duration_ms))
+        loop = self.hass.loop
+        end_ts = loop.time() + duration_ms / 1000.0
+        try:
+            if position > current:
+                while loop.time() < end_ts:
+                    await self.async_send_feet_up()
+                    await asyncio.sleep(0.3)
+            else:
+                while loop.time() < end_ts:
+                    await self.async_send_feet_down()
+                    await asyncio.sleep(0.3)
+        finally:
+            await self.async_send_stop()
+        self.set_feet_position(position)
+        self.set_movement_active(False)
+        return True
+
     async def async_set_light(self, on: bool) -> bool:
         ok = await self._send_command(CMD_LIGHT_ON if on else CMD_LIGHT_OFF)
         if ok:
@@ -210,9 +301,138 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return ok
 
     async def async_send_keep_alive(self) -> bool:
-        return await self._send_command(_make_keep_alive(self._pin))
+        return await self._send_command(_make_keep_alive(self.pin))
+
+    async def _keep_alive_loop(self) -> None:
+        """Send keep-alive every 30s (same as YAML keep_connection_alive script)."""
+        try:
+            while True:
+                await asyncio.sleep(KEEP_ALIVE_INTERVAL_SEC)
+                addr = self.device_address
+                if addr and bluetooth.async_address_present(
+                    self.hass, addr, connectable=True
+                ):
+                    await self.async_send_keep_alive()
+                    _LOGGER.debug("Keep-alive sent to %s", addr)
+        except asyncio.CancelledError:
+            _LOGGER.debug("Keep-alive loop stopped")
+            raise
+
+    def start_keep_alive_loop(self) -> None:
+        """Start the periodic keep-alive task (call from async_setup_entry)."""
+        if self._keep_alive_task is not None and not self._keep_alive_task.done():
+            return
+        self._keep_alive_task = self.hass.async_create_task(self._keep_alive_loop())
+        _LOGGER.debug("Keep-alive loop started (every %ss)", KEEP_ALIVE_INTERVAL_SEC)
+
+    def cancel_keep_alive_loop(self) -> None:
+        """Cancel the keep-alive task (call on integration unload)."""
+        if self._keep_alive_task:
+            self._keep_alive_task.cancel()
+            self._keep_alive_task = None
 
     async def async_ensure_address_from_discovery(self) -> bool:
         """Run discovery once to try to get device address. Returns True if address is set."""
         await self._async_ensure_address()
-        return self._device_address is not None
+        return self.device_address is not None
+
+    def reset_ble_connection(self) -> None:
+        """Clear discovered address so next refresh will rediscover (like YAML Reset BLE Connection)."""
+        self._device_address = None
+
+    async def _calibration_loop(self, head: bool) -> None:
+        """Send head up or feet up repeatedly until stopped (for calibration)."""
+        try:
+            while self._calibration_task and not self._calibration_task.cancelled():
+                if head:
+                    await self.async_send_head_up()
+                else:
+                    await self.async_send_feet_up()
+                await asyncio.sleep(0.3)
+        except asyncio.CancelledError:
+            raise
+
+    async def async_start_calibration_head(self) -> bool:
+        """Start head calibration (move head up until user stops). Returns True if started."""
+        if self._calibration_task and not self._calibration_task.done():
+            return False
+        await self.async_send_stop()
+        await asyncio.sleep(0.5)
+        self._calibration_mode = 1
+        self._calibration_active = True
+        self._calibration_start_time = self.hass.loop.time()
+        self.set_head_position(0.0)
+        self._calibration_task = self.hass.async_create_task(self._calibration_loop(head=True))
+        _LOGGER.info("Head calibration started; press CALIBRATION STOP when head is fully up")
+        return True
+
+    async def async_start_calibration_feet(self) -> bool:
+        """Start feet calibration (move feet up until user stops). Returns True if started."""
+        if self._calibration_task and not self._calibration_task.done():
+            return False
+        await self.async_send_stop()
+        await asyncio.sleep(0.5)
+        self._calibration_mode = 2
+        self._calibration_active = True
+        self._calibration_start_time = self.hass.loop.time()
+        self.set_feet_position(0.0)
+        self._calibration_task = self.hass.async_create_task(self._calibration_loop(head=False))
+        _LOGGER.info("Feet calibration started; press CALIBRATION STOP when feet are fully up")
+        return True
+
+    async def async_stop_calibration(self) -> tuple[bool, float | None, float | None]:
+        """Stop calibration, save duration, set position to 100%%, run move_to_zero. Returns (ok, head_sec, feet_sec)."""
+        if self._calibration_task:
+            self._calibration_task.cancel()
+            try:
+                await self._calibration_task
+            except asyncio.CancelledError:
+                pass
+            self._calibration_task = None
+        await self.async_send_stop()
+        await asyncio.sleep(0.2)
+        head_sec = feet_sec = None
+        duration_ms = int((self.hass.loop.time() - self._calibration_start_time) * 1000)
+        duration_ms = max(1000, min(120000, duration_ms))
+        if self._calibration_mode == 1:
+            head_sec = duration_ms / 1000.0
+            self._head_calibration_ms = duration_ms
+            self.set_head_position(100.0)
+            _LOGGER.info("Head calibration saved: %.1f s", head_sec)
+        elif self._calibration_mode == 2:
+            feet_sec = duration_ms / 1000.0
+            self._feet_calibration_ms = duration_ms
+            self.set_feet_position(100.0)
+            _LOGGER.info("Feet calibration saved: %.1f s", feet_sec)
+        self._calibration_mode = 0
+        self._calibration_active = False
+        await self.async_move_to_zero()
+        return True, head_sec, feet_sec
+
+    async def async_move_to_zero(self) -> None:
+        """Move head then feet down to 0%% (like YAML move_to_zero script)."""
+        _LOGGER.info("Moving to zero (flat)")
+        # Head down
+        head_start = self._head_position
+        if head_start > 0.5:
+            duration_ms = int((head_start / 100.0) * self._head_calibration_ms)
+            duration_ms = max(300, duration_ms)
+            end_ts = self.hass.loop.time() + duration_ms / 1000.0
+            while self.hass.loop.time() < end_ts:
+                await self.async_send_head_down()
+                await asyncio.sleep(0.3)
+            await self.async_send_stop()
+        self.set_head_position(0.0)
+        await asyncio.sleep(0.5)
+        # Feet down
+        feet_start = self._feet_position
+        if feet_start > 0.5:
+            duration_ms = int((feet_start / 100.0) * self._feet_calibration_ms)
+            duration_ms = max(300, duration_ms)
+            end_ts = self.hass.loop.time() + duration_ms / 1000.0
+            while self.hass.loop.time() < end_ts:
+                await self.async_send_feet_down()
+                await asyncio.sleep(0.3)
+            await self.async_send_stop()
+        self.set_feet_position(0.0)
+        _LOGGER.info("Move to zero complete")
