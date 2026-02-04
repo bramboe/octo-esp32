@@ -1,0 +1,13 @@
+{
+  "domain": "octo_bed",
+  "name": "Octo Bed",
+  "codeowners": ["@bramboersma"],
+  "config_flow": true,
+  "dependencies": ["bluetooth"],
+  "documentation": "https://github.com/bramboersma/octo-esp32",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/bramboersma/octo-esp32/issues",
+  "requirements": ["bleak>=0.21.0"],
+  "version": "1.0.0"
+}
