@@ -41,3 +41,6 @@ KEEP_ALIVE_SUFFIX = bytes([0x40])
 # Connection timeout
 CONNECT_TIMEOUT = 15.0
 WRITE_TIMEOUT = 5.0
+
+# Keep-alive interval (same as YAML keep_connection_alive script)
+KEEP_ALIVE_INTERVAL_SEC = 30
