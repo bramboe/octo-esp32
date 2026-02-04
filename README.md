@@ -12,7 +12,7 @@ Control your **Octo Bed** (or compatible BLE bed remote) from Home Assistant usi
 ### Via HACS (recommended)
 
 1. In HACS go to **Integrations** → **⋮** → **Custom repositories**
-2. Add: `https://github.com/bramboersma/octo-esp32`
+2. Add: `https://github.com/bramboe/octo-esp32`
 3. Choose category **Integration**
 4. Install **Octo Bed**
 5. Restart Home Assistant
@@ -56,7 +56,7 @@ From the integration’s **Configure** you can change:
 
 ## Protocol
 
-The integration talks to the bed remote over BLE (service `FFE0`, characteristic `FFE1`), using the same command set as the [Octo Bed ESPHome configuration](https://github.com/bramboersma/octo-esp32). It is compatible with remotes that advertise as **RC2** (or the name you configure).
+The integration talks to the bed remote over BLE (service `FFE0`, characteristic `FFE1`), using the same command set as the [Octo Bed ESPHome configuration](https://github.com/bramboe/octo-esp32). It is compatible with remotes that advertise as **RC2** (or the name you configure).
 
 ## License
 
