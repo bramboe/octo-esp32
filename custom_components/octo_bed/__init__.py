@@ -10,12 +10,15 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 from .coordinator import OctoBedCoordinator
+from .services import async_setup_services
 
 PLATFORMS: list[Platform] = [
     Platform.COVER,
     Platform.LIGHT,
     Platform.SWITCH,
     Platform.BUTTON,
+    Platform.SENSOR,
+    Platform.BINARY_SENSOR,
 ]
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,6 +35,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = OctoBedCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    async_setup_services(hass)
+
+    # Start periodic keep-alive (every 30s) like the ESPHome YAML keep_connection_alive script
+    coordinator.start_keep_alive_loop()
+    entry.async_on_unload(coordinator.cancel_keep_alive_loop)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
