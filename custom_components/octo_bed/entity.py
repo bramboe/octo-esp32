@@ -25,4 +25,4 @@ class OctoBedEntity(CoordinatorEntity[OctoBedCoordinator], Entity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator._device_address is not None and super().available
+        return self.coordinator.device_address is not None and super().available
