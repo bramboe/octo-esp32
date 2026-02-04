@@ -96,6 +96,94 @@ class OctoBedFeetDownSwitch(OctoBedMovementSwitch):
     _direction_up = False
 
 
+class OctoBedBothUpSwitch(OctoBedEntity, SwitchEntity):
+    """Both sections up (hold to move)."""
+
+    _attr_name = "Both Up"
+    _attr_unique_id = "both_up"
+    _task: asyncio.Task | None = None
+
+    async def _run_loop(self) -> None:
+        coordinator = self.coordinator
+        coordinator.set_movement_active(True)
+        try:
+            while self._task and not self._task.cancelled():
+                await coordinator.async_send_both_up()
+                await asyncio.sleep(0.3)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await coordinator.async_send_stop()
+            coordinator.set_movement_active(False)
+            self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        if self._task and not self._task.done():
+            return
+        self._task = asyncio.create_task(self._run_loop())
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+        await self.coordinator.async_send_stop()
+        self.coordinator.set_movement_active(False)
+        self.async_write_ha_state()
+
+    @property
+    def is_on(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+
+class OctoBedBothDownSwitch(OctoBedEntity, SwitchEntity):
+    """Both sections down (hold to move)."""
+
+    _attr_name = "Both Down"
+    _attr_unique_id = "both_down"
+    _task: asyncio.Task | None = None
+
+    async def _run_loop(self) -> None:
+        coordinator = self.coordinator
+        coordinator.set_movement_active(True)
+        try:
+            while self._task and not self._task.cancelled():
+                await coordinator.async_send_both_down()
+                await asyncio.sleep(0.3)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await coordinator.async_send_stop()
+            coordinator.set_movement_active(False)
+            self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        if self._task and not self._task.done():
+            return
+        self._task = asyncio.create_task(self._run_loop())
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+        await self.coordinator.async_send_stop()
+        self.coordinator.set_movement_active(False)
+        self.async_write_ha_state()
+
+    @property
+    def is_on(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -108,4 +196,6 @@ async def async_setup_entry(
         OctoBedHeadDownSwitch(coordinator, entry),
         OctoBedFeetUpSwitch(coordinator, entry),
         OctoBedFeetDownSwitch(coordinator, entry),
+        OctoBedBothUpSwitch(coordinator, entry),
+        OctoBedBothDownSwitch(coordinator, entry),
     ])
