@@ -1,0 +1,27 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Octo Bed remote",
+        "description": "Connect using your existing Bluetooth Proxy. Leave device address empty to discover by name (e.g. RC2).",
+        "data": {
+          "device_name": "Remote name",
+          "device_address": "MAC address (optional)",
+          "pin": "PIN (4 digits)",
+          "head_calibration_seconds": "Head full travel (seconds)",
+          "feet_calibration_seconds": "Feet full travel (seconds)"
+        }
+      },
+      "init": {
+        "title": "Calibration",
+        "data": {
+          "head_calibration_seconds": "Head full travel (seconds)",
+          "feet_calibration_seconds": "Feet full travel (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_mac": "MAC must be exactly 12 hex characters (e.g. AA:BB:CC:DD:EE:FF)"
+    }
+  }
+}
