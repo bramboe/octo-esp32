@@ -53,6 +53,11 @@ def _format_mac_display(mac: str) -> str:
     return ":".join(mac[i : i + 2] for i in range(0, 12, 2))
 
 
+def _format_mac_for_options(entry: config_entries.ConfigEntry) -> str:
+    """Current MAC from entry for options form (empty string if not set)."""
+    return entry.data.get(CONF_DEVICE_ADDRESS) or ""
+
+
 class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle Octo Bed config flow."""
 
@@ -99,16 +104,34 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OctoBedOptionsFlow(config_entries.OptionsFlow):
-    """Options flow for Octo Bed."""
+    """Options flow for Octo Bed (calibration, MAC, PIN)."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._entry = config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Manage options."""
+        """Manage options: calibration seconds, optional MAC, optional PIN."""
         if user_input is not None:
             head_sec = max(1.0, min(120.0, float(user_input.get(CONF_HEAD_CALIBRATION_SEC, 30))))
             feet_sec = max(1.0, min(120.0, float(user_input.get(CONF_FEET_CALIBRATION_SEC, 30))))
+            raw_mac = (user_input.get(CONF_DEVICE_ADDRESS) or "").strip()
+            pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+            normalized_mac = _normalize_mac(raw_mac)
+            if raw_mac and len(normalized_mac) != 12:
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=self._schema(),
+                    errors={"base": "invalid_mac"},
+                )
+            new_data = {**self._entry.data}
+            new_data[CONF_HEAD_CALIBRATION_SEC] = head_sec
+            new_data[CONF_FEET_CALIBRATION_SEC] = feet_sec
+            new_data[CONF_PIN] = pin
+            if normalized_mac:
+                new_data[CONF_DEVICE_ADDRESS] = _format_mac_display(normalized_mac)
+            elif raw_mac == "":
+                new_data.pop(CONF_DEVICE_ADDRESS, None)
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
             return self.async_create_entry(
                 data={
                     CONF_HEAD_CALIBRATION_SEC: head_sec,
@@ -116,6 +139,9 @@ class OctoBedOptionsFlow(config_entries.OptionsFlow):
                 }
             )
 
+        return self.async_show_form(step_id="init", data_schema=self._schema())
+
+    def _schema(self) -> vol.Schema:
         head = self._entry.options.get(
             CONF_HEAD_CALIBRATION_SEC,
             self._entry.data.get(CONF_HEAD_CALIBRATION_SEC, DEFAULT_HEAD_CALIBRATION_SEC),
@@ -124,10 +150,13 @@ class OctoBedOptionsFlow(config_entries.OptionsFlow):
             CONF_FEET_CALIBRATION_SEC,
             self._entry.data.get(CONF_FEET_CALIBRATION_SEC, DEFAULT_FEET_CALIBRATION_SEC),
         )
-        schema = vol.Schema(
+        mac = _format_mac_for_options(self._entry)
+        pin = self._entry.data.get(CONF_PIN, DEFAULT_PIN)
+        return vol.Schema(
             {
                 vol.Required(CONF_HEAD_CALIBRATION_SEC, default=head): vol.Coerce(float),
                 vol.Required(CONF_FEET_CALIBRATION_SEC, default=feet): vol.Coerce(float),
+                vol.Optional(CONF_DEVICE_ADDRESS, default=mac): str,
+                vol.Required(CONF_PIN, default=pin): str,
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
