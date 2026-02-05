@@ -584,7 +584,15 @@ async def send_single_command(
         await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
         return True
     except Exception as e:
-        _LOGGER.warning("BLE write failed: %s", e)
+        err = str(e).lower()
+        if "characteristic" in err and "not found" in err:
+            _LOGGER.warning(
+                "BLE write failed: device at %s does not expose the bed control characteristic (FFE1). "
+                "Use the bed base unit's BLE MAC address, not the remote (RC2).",
+                addr,
+            )
+        else:
+            _LOGGER.warning("BLE write failed: %s", e)
         return False
     finally:
         if client:
@@ -628,7 +636,15 @@ async def _standalone_calibration_loop(
             pass
         raise
     except Exception as e:
-        _LOGGER.warning("Calibration loop error: %s", e)
+        err = str(e).lower()
+        if "characteristic" in err and "not found" in err:
+            _LOGGER.warning(
+                "Calibration failed: device at %s does not expose the bed control characteristic (FFE1). "
+                "Use the bed base unit's BLE MAC address, not the remote (RC2).",
+                addr,
+            )
+        else:
+            _LOGGER.warning("Calibration loop error: %s", e)
     finally:
         if client:
             await client.disconnect()
