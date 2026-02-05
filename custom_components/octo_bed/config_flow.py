@@ -8,7 +8,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.components import bluetooth
+from homeassistant.components import bluetooth, persistent_notification
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 
@@ -80,6 +80,13 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="already_configured")
         await self.async_set_unique_id(address)
         self._abort_if_unique_id_configured()
+        # Show discovery in Home Assistant notifications
+        persistent_notification.async_create(
+            self.hass,
+            f"**{name or 'Octo Bed'}**\n\nMAC address: `{address}`\n\nYou can add this device from the dialog that appeared, or go to **Settings** → **Devices & Services** → **Discovered**.",
+            title="Octo Bed discovered",
+            notification_id=f"octo_bed_discovery_{address.replace(':', '_')}",
+        )
         return await self.async_step_confirm_bluetooth(name=name, address=address)
 
     async def async_step_confirm_bluetooth(
