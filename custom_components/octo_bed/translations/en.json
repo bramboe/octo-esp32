@@ -23,6 +23,8 @@
           "device_name": "Remote name",
           "device_address": "MAC address (optional)",
           "device_nickname": "Device name (optional)",
+          "head_calibration_seconds": "Head full travel (seconds)",
+          "feet_calibration_seconds": "Feet full travel (seconds)",
           "pin": "PIN (4 digits)"
         }
       },
@@ -31,7 +33,9 @@
         "description": "Set PIN for this bed. MAC: {mac} Optionally give the device a name (e.g. Living room bed).",
         "data": {
           "pin": "PIN (4 digits)",
-          "device_nickname": "Device name (optional)"
+          "device_nickname": "Device name (optional)",
+          "head_calibration_seconds": "Head full travel (seconds)",
+          "feet_calibration_seconds": "Feet full travel (seconds)"
         }
       },
       "init": {
