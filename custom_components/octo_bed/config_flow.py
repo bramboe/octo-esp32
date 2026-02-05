@@ -11,7 +11,6 @@ from homeassistant import config_entries
 from homeassistant.components import bluetooth, persistent_notification
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.config_entries import FlowType
 
 from .const import (
     CONF_DEVICE_ADDRESS,
@@ -134,14 +133,11 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if nickname:
                 data[CONF_DEVICE_NICKNAME] = nickname
             title = _entry_title_from_data(data)
-            result = await self.hass.config_entries.flow.async_init(
-                DOMAIN,
-                context={"source": "calibration_setup"},
-            )
-            return self.async_create_entry(
-                title=title,
-                data=data,
-                next_flow=(FlowType.CONFIG_FLOW, result["flow_id"]),
+            self.context["pending_entry_data"] = data
+            self.context["pending_entry_title"] = title
+            return self.async_show_form(
+                step_id="calibrate",
+                data_schema=vol.Schema({}),
             )
         self.context["discovered_name"] = name
         self.context["discovered_address"] = address
@@ -167,12 +163,6 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_calibration_setup(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Initial step when flow is started for post-add calibration (HA uses context source as step_id)."""
-        return await self._async_step_calibrate_setup(user_input)
-
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial step: choose scan or manual."""
         if user_input is not None:
@@ -190,22 +180,20 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="user", data_schema=schema)
 
-    async def _async_step_calibrate_setup(
+    async def async_step_calibrate(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show calibration step: use device buttons (Calibrate Head/Feet, Calibration Stop) then Submit."""
+        """Show calibration instructions; on Submit create the config entry."""
         if user_input is not None:
+            data = self.context.get("pending_entry_data")
+            title = self.context.get("pending_entry_title", "Octo Bed")
+            if data and title:
+                return self.async_create_entry(title=title, data=data)
             return self.async_abort(reason="calibration_complete")
         return self.async_show_form(
             step_id="calibrate",
             data_schema=vol.Schema({}),
         )
-
-    async def async_step_calibrate(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle Submit from calibration setup step."""
-        return self.async_abort(reason="calibration_complete")
 
     def _is_octo_bed_candidate(self, info: bluetooth.BluetoothServiceInfo) -> bool:
         """True if this device looks like an Octo Bed remote (FFE0 service or RC2/octo name)."""
@@ -317,14 +305,11 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if nickname:
                 data[CONF_DEVICE_NICKNAME] = nickname
             title = _entry_title_from_data(data)
-            result = await self.hass.config_entries.flow.async_init(
-                DOMAIN,
-                context={"source": "calibration_setup"},
-            )
-            return self.async_create_entry(
-                title=title,
-                data=data,
-                next_flow=(FlowType.CONFIG_FLOW, result["flow_id"]),
+            self.context["pending_entry_data"] = data
+            self.context["pending_entry_title"] = title
+            return self.async_show_form(
+                step_id="calibrate",
+                data_schema=vol.Schema({}),
             )
 
         return self.async_show_form(step_id="manual", data_schema=STEP_USER_SCHEMA)
