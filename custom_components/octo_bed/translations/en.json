@@ -40,7 +40,10 @@
       },
       "calibrate": {
         "title": "Calibration",
-        "description": "Device added. Go to **Settings** → **Devices & Services** → **Octo Bed** → your device and use the **Calibrate Head**, **Calibrate Feet**, and **Calibration Stop** buttons to set full travel. When finished, click **Submit** below."
+        "description": "Use the buttons below to move the bed head or feet up, or stop. When calibration is done, choose **Done — finish setup** and submit.",
+        "data": {
+          "action": "Action"
+        }
       },
       "init": {
         "title": "Calibration",
