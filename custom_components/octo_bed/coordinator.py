@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import Any, Callable
 
 from bleak import BleakClient
 from homeassistant.components import bluetooth
@@ -31,6 +31,7 @@ from .const import (
     KEEP_ALIVE_INTERVAL_SEC,
     KEEP_ALIVE_PREFIX,
     KEEP_ALIVE_SUFFIX,
+    MOVEMENT_COMMAND_INTERVAL_SEC,
     WRITE_TIMEOUT,
 )
 
@@ -290,6 +291,42 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_send_both_down(self) -> bool:
         return await self._send_command(CMD_BOTH_DOWN)
+
+    async def async_run_movement_loop(
+        self,
+        command: bytes,
+        is_cancelled: Callable[[], bool],
+    ) -> None:
+        """Run a movement command in a loop over a single BLE connection for smooth movement.
+        Caller must ensure only one loop runs at a time. Sends CMD_STOP when done or cancelled.
+        """
+        ble_device = self._get_ble_device()
+        if not ble_device:
+            self.set_movement_active(False)
+            return
+        self.set_movement_active(True)
+        try:
+            async with BleakClient(
+                ble_device,
+                timeout=CONNECT_TIMEOUT,
+                disconnected_callback=None,
+            ) as client:
+                while not is_cancelled():
+                    await client.write_gatt_char(
+                        BLE_CHAR_UUID, command, response=False
+                    )
+                    await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+                await client.write_gatt_char(
+                    BLE_CHAR_UUID, CMD_STOP, response=False
+                )
+        except asyncio.CancelledError:
+            await self._send_command(CMD_STOP)
+            raise
+        except Exception as e:
+            _LOGGER.warning("Movement loop BLE error: %s", e)
+            await self._send_command(CMD_STOP)
+        finally:
+            self.set_movement_active(False)
 
     async def async_set_head_position(self, position: float) -> bool:
         """Move head to 0-100%% (like cover set_position). Returns True if command accepted."""
