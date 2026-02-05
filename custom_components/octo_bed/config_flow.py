@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -14,22 +13,24 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
+    CMD_STOP,
     CONF_DEVICE_ADDRESS,
     CONF_DEVICE_NAME,
     CONF_DEVICE_NICKNAME,
     CONF_FEET_CALIBRATION_SEC,
     CONF_HEAD_CALIBRATION_SEC,
     CONF_PIN,
-    CMD_FEET_UP,
-    CMD_HEAD_UP,
-    CMD_STOP,
     DEFAULT_DEVICE_NAME,
     DEFAULT_FEET_CALIBRATION_SEC,
     DEFAULT_HEAD_CALIBRATION_SEC,
     DEFAULT_PIN,
     DOMAIN,
 )
-from .coordinator import send_command_to_device
+from .coordinator import (
+    send_single_command,
+    start_standalone_calibration,
+    stop_standalone_calibration,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,6 +44,21 @@ STEP_USER_SCHEMA = vol.Schema(
         vol.Required(CONF_PIN, default=DEFAULT_PIN): str,
     }
 )
+
+
+def _calibrate_schema() -> vol.Schema:
+    """Schema for calibration step: action dropdown (head / feet / stop / done)."""
+    return vol.Schema(
+        {
+            vol.Required("action", default=""): vol.In({
+                "": "— Choose an action —",
+                "head": "▶ Start head calibration",
+                "feet": "▶ Start feet calibration",
+                "stop": "■ Stop calibration",
+                "done": "Done — finish setup",
+            }),
+        }
+    )
 
 
 def _normalize_mac(mac: str) -> str:
@@ -188,56 +204,55 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_calibrate(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show calibration instructions and buttons to move head/feet or stop; on Done create the config entry."""
+        """Show calibration actions (head/feet/stop) and Done; on Done create the config entry."""
         pending = self.context.get("pending_entry_data") or {}
         address = (pending.get(CONF_DEVICE_ADDRESS) or "").strip()
         device_name = (pending.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
 
-        CALIBRATION_ACTIONS = {
-            "calibrate_head": "Head up",
-            "calibrate_feet": "Feet up",
-            "calibration_stop": "Stop",
-            "done": "Done — finish setup",
-        }
-        schema = vol.Schema(
-            {
-                vol.Required("action", default="done"): vol.In(CALIBRATION_ACTIONS),
-            }
-        )
-
         if user_input is not None:
-            action = user_input.get("action", "done")
+            action = (user_input.get("action") or "").strip()
+            if action == "head" and address:
+                start_standalone_calibration(self.hass, address, device_name, head=True)
+                return self.async_show_form(
+                    step_id="calibrate",
+                    data_schema=_calibrate_schema(),
+                    description_placeholders={"status": "Head calibration running — click Stop when fully up, then Done to finish."},
+                )
+            if action == "feet" and address:
+                start_standalone_calibration(self.hass, address, device_name, head=False)
+                return self.async_show_form(
+                    step_id="calibrate",
+                    data_schema=_calibrate_schema(),
+                    description_placeholders={"status": "Feet calibration running — click Stop when fully up, then Done to finish."},
+                )
+            if action == "stop" and address:
+                stop_standalone_calibration(self.hass, address)
+                await send_single_command(self.hass, address, device_name, CMD_STOP)
+                return self.async_show_form(
+                    step_id="calibrate",
+                    data_schema=_calibrate_schema(),
+                    description_placeholders={"status": "Stopped."},
+                )
+            if action in ("head", "feet") and not address:
+                return self.async_show_form(
+                    step_id="calibrate",
+                    data_schema=_calibrate_schema(),
+                    description_placeholders={"status": "No device address — add MAC in manual setup, or click Done and calibrate from the device page later."},
+                )
             if action == "done":
+                if address:
+                    stop_standalone_calibration(self.hass, address)
+                    await send_single_command(self.hass, address, device_name, CMD_STOP)
+                data = self.context.get("pending_entry_data")
                 title = self.context.get("pending_entry_title", "Octo Bed")
-                if pending and title:
-                    return self.async_create_entry(title=title, data=pending)
+                if data and title:
+                    return self.async_create_entry(title=title, data=data)
                 return self.async_abort(reason="calibration_complete")
-            if address:
-                if action == "calibrate_head":
-                    for _ in range(7):
-                        await send_command_to_device(
-                            self.hass, address, device_name, CMD_HEAD_UP
-                        )
-                        await asyncio.sleep(0.3)
-                elif action == "calibrate_feet":
-                    for _ in range(7):
-                        await send_command_to_device(
-                            self.hass, address, device_name, CMD_FEET_UP
-                        )
-                        await asyncio.sleep(0.3)
-                elif action == "calibration_stop":
-                    await send_command_to_device(
-                        self.hass, address, device_name, CMD_STOP
-                    )
-            return self.async_show_form(
-                step_id="calibrate",
-                data_schema=schema,
-                description_placeholders={"address": address or "—"},
-            )
+
         return self.async_show_form(
             step_id="calibrate",
-            data_schema=schema,
-            description_placeholders={"address": address or "—"},
+            data_schema=_calibrate_schema(),
+            description_placeholders={"status": ""},
         )
 
     def _is_octo_bed_candidate(self, info: bluetooth.BluetoothServiceInfo) -> bool:
