@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -18,7 +19,7 @@ class OctoBedConnectionSensor(OctoBedEntity, SensorEntity):
     _attr_name = "Connection"
     _attr_unique_id = "connection"
     _attr_icon = "mdi:bluetooth-connect"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self) -> str:
@@ -37,7 +38,7 @@ class OctoBedMacAddressSensor(OctoBedEntity, SensorEntity):
     _attr_name = "MAC address"
     _attr_unique_id = "mac_address"
     _attr_icon = "mdi:identifier"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self) -> str:
@@ -99,7 +100,7 @@ class OctoBedBleStatusSensor(OctoBedEntity, SensorEntity):
     _attr_name = "BLE status"
     _attr_unique_id = "ble_status"
     _attr_icon = "mdi:bluetooth-settings"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self) -> str:
