@@ -84,6 +84,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_task: asyncio.Task[None] | None = None
         self._calibration_active = False
         self._calibration_stop_event: asyncio.Event | None = None
+        # True only after we've sent keep-alive with PIN and device stayed connected (wrong PIN = disconnect)
+        self._authenticated: bool = False
 
     @property
     def device_address(self) -> str | None:
@@ -164,7 +166,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _data(self) -> dict[str, Any]:
         addr = self.device_address
-        connected = addr is not None and self._address_present(addr)
+        # Connected = device in range AND PIN accepted (wrong PIN causes device to disconnect us)
+        connected = bool(addr and self._address_present(addr) and self._authenticated)
         return {
             "head_position": self._head_position,
             "feet_position": self._feet_position,
@@ -176,12 +179,51 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "calibration_active": self._calibration_active,
         }
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        """Ensure we have a device address (from discovery if needed)."""
+    async def _check_pin_accepted(self) -> bool:
+        """Connect, send keep-alive with PIN, wait; return True only if device stays connected (PIN accepted)."""
         addr = self.device_address
+        if not addr or not self._address_present(addr):
+            return False
+        ble_device = self._get_ble_device()
+        if not ble_device:
+            return False
+        client = None
+        try:
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                self._device_name or "Octo Bed",
+                disconnected_callback=None,
+                timeout=CONNECT_TIMEOUT,
+            )
+            keep_alive = _make_keep_alive(self.pin)
+            try:
+                await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
+            except Exception:
+                try:
+                    await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+                except Exception:
+                    return False
+            await asyncio.sleep(3.0)
+            if not client.is_connected:
+                _LOGGER.debug("Device disconnected after keep-alive (wrong PIN or not bed base)")
+                return False
+            return True
+        except Exception as e:
+            _LOGGER.debug("PIN check failed: %s", e)
+            return False
+        finally:
+            if client:
+                await client.disconnect()
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Ensure we have a device address and verify PIN is accepted for 'connected' state."""
+        addr = self.device_address
+        if addr and self._address_present(addr):
+            self._authenticated = await self._check_pin_accepted()
+            return self._data()
+        self._authenticated = False
         if addr:
-            if self._address_present(addr):
-                return self._data()
             _LOGGER.debug("Device %s not present, will retry discovery", addr)
         await self._async_ensure_address()
         return self._data()
