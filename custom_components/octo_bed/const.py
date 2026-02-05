@@ -44,3 +44,6 @@ WRITE_TIMEOUT = 5.0
 
 # Keep-alive interval (same as YAML keep_connection_alive script)
 KEEP_ALIVE_INTERVAL_SEC = 30
+
+# Movement switch: send command this often over a single BLE connection (smoother than reconnect each time)
+MOVEMENT_COMMAND_INTERVAL_SEC = 0.2
