@@ -14,7 +14,7 @@ from .entity import OctoBedEntity
 
 
 class OctoBedConnectionSensor(OctoBedEntity, SensorEntity):
-    """Sensor for BLE connection status (connected / disconnected)."""
+    """Sensor for BLE connection status (connected / disconnected / searching for device)."""
 
     _attr_name = "Connection"
     _attr_unique_id = "connection"
@@ -23,9 +23,12 @@ class OctoBedConnectionSensor(OctoBedEntity, SensorEntity):
 
     @property
     def native_value(self) -> str:
-        if not self.coordinator.data:
-            return "disconnected"
-        return "connected" if self.coordinator.data.get("connected") else "disconnected"
+        data = self.coordinator.data or {}
+        if data.get("connected"):
+            return "connected"
+        if not self.coordinator.device_address:
+            return "Searching for device"
+        return "disconnected"
 
     @property
     def available(self) -> bool:
