@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -19,12 +20,16 @@ from .const import (
     CONF_FEET_CALIBRATION_SEC,
     CONF_HEAD_CALIBRATION_SEC,
     CONF_PIN,
+    CMD_FEET_UP,
+    CMD_HEAD_UP,
+    CMD_STOP,
     DEFAULT_DEVICE_NAME,
     DEFAULT_FEET_CALIBRATION_SEC,
     DEFAULT_HEAD_CALIBRATION_SEC,
     DEFAULT_PIN,
     DOMAIN,
 )
+from .coordinator import send_command_to_device
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -183,16 +188,56 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_calibrate(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show calibration instructions; on Submit create the config entry."""
+        """Show calibration instructions and buttons to move head/feet or stop; on Done create the config entry."""
+        pending = self.context.get("pending_entry_data") or {}
+        address = (pending.get(CONF_DEVICE_ADDRESS) or "").strip()
+        device_name = (pending.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
+
+        CALIBRATION_ACTIONS = {
+            "calibrate_head": "Head up",
+            "calibrate_feet": "Feet up",
+            "calibration_stop": "Stop",
+            "done": "Done — finish setup",
+        }
+        schema = vol.Schema(
+            {
+                vol.Required("action", default="done"): vol.In(CALIBRATION_ACTIONS),
+            }
+        )
+
         if user_input is not None:
-            data = self.context.get("pending_entry_data")
-            title = self.context.get("pending_entry_title", "Octo Bed")
-            if data and title:
-                return self.async_create_entry(title=title, data=data)
-            return self.async_abort(reason="calibration_complete")
+            action = user_input.get("action", "done")
+            if action == "done":
+                title = self.context.get("pending_entry_title", "Octo Bed")
+                if pending and title:
+                    return self.async_create_entry(title=title, data=pending)
+                return self.async_abort(reason="calibration_complete")
+            if address:
+                if action == "calibrate_head":
+                    for _ in range(7):
+                        await send_command_to_device(
+                            self.hass, address, device_name, CMD_HEAD_UP
+                        )
+                        await asyncio.sleep(0.3)
+                elif action == "calibrate_feet":
+                    for _ in range(7):
+                        await send_command_to_device(
+                            self.hass, address, device_name, CMD_FEET_UP
+                        )
+                        await asyncio.sleep(0.3)
+                elif action == "calibration_stop":
+                    await send_command_to_device(
+                        self.hass, address, device_name, CMD_STOP
+                    )
+            return self.async_show_form(
+                step_id="calibrate",
+                data_schema=schema,
+                description_placeholders={"address": address or "—"},
+            )
         return self.async_show_form(
             step_id="calibrate",
-            data_schema=vol.Schema({}),
+            data_schema=schema,
+            description_placeholders={"address": address or "—"},
         )
 
     def _is_octo_bed_candidate(self, info: bluetooth.BluetoothServiceInfo) -> bool:
