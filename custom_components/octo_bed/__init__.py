@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
@@ -38,8 +38,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async_setup_services(hass)
 
-    # Start periodic keep-alive (every 30s) like the ESPHome YAML keep_connection_alive script
-    coordinator.start_keep_alive_loop()
+    # Start keep-alive loop only after HA has finished starting (avoids blocking bootstrap)
+    def _start_keep_alive(_event=None) -> None:
+        coordinator.start_keep_alive_loop()
+
+    if hass.is_running:
+        _start_keep_alive()
+    else:
+        entry.async_on_unload(
+            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _start_keep_alive)
+        )
     entry.async_on_unload(coordinator.cancel_keep_alive_loop)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
