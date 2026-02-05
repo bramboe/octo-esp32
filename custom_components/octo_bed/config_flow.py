@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_PIN,
     DOMAIN,
 )
+from .coordinator import validate_pin
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,8 +34,6 @@ STEP_USER_SCHEMA = vol.Schema(
         vol.Required(CONF_DEVICE_NAME, default=DEFAULT_DEVICE_NAME): str,
         vol.Optional(CONF_DEVICE_ADDRESS, default=""): str,
         vol.Optional(CONF_DEVICE_NICKNAME, default=""): str,
-        vol.Required(CONF_HEAD_CALIBRATION_SEC, default=DEFAULT_HEAD_CALIBRATION_SEC): vol.Coerce(float),
-        vol.Required(CONF_FEET_CALIBRATION_SEC, default=DEFAULT_FEET_CALIBRATION_SEC): vol.Coerce(float),
         vol.Required(CONF_PIN, default=DEFAULT_PIN): str,
     }
 )
@@ -121,14 +120,26 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_manual()
             pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
             nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
-            head_sec = max(1.0, min(120.0, float(user_input.get(CONF_HEAD_CALIBRATION_SEC, DEFAULT_HEAD_CALIBRATION_SEC))))
-            feet_sec = max(1.0, min(120.0, float(user_input.get(CONF_FEET_CALIBRATION_SEC, DEFAULT_FEET_CALIBRATION_SEC))))
+            if not await validate_pin(self.hass, address, name or "Octo Bed", pin):
+                return self.async_show_form(
+                    step_id="confirm_bluetooth",
+                    data_schema=vol.Schema({
+                        vol.Required(CONF_PIN, default=pin): str,
+                        vol.Optional(CONF_DEVICE_NICKNAME, default=nickname): str,
+                    }),
+                    description_placeholders={
+                        "name": name or "Octo Bed",
+                        "address": address,
+                        "mac": address,
+                    },
+                    errors={"base": "invalid_pin"},
+                )
             data = {
                 CONF_DEVICE_NAME: name or address,
                 CONF_DEVICE_ADDRESS: address,
                 CONF_PIN: pin,
-                CONF_HEAD_CALIBRATION_SEC: head_sec,
-                CONF_FEET_CALIBRATION_SEC: feet_sec,
+                CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
+                CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
             }
             if nickname:
                 data[CONF_DEVICE_NICKNAME] = nickname
@@ -144,8 +155,6 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_PIN, default=DEFAULT_PIN): str,
                 vol.Optional(CONF_DEVICE_NICKNAME, default=""): str,
-                vol.Required(CONF_HEAD_CALIBRATION_SEC, default=DEFAULT_HEAD_CALIBRATION_SEC): vol.Coerce(float),
-                vol.Required(CONF_FEET_CALIBRATION_SEC, default=DEFAULT_FEET_CALIBRATION_SEC): vol.Coerce(float),
             }
         )
         return self.async_show_form(
@@ -257,13 +266,11 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_manual(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Manual entry (device name, optional MAC, PIN, calibration)."""
+        """Manual entry (device name, optional MAC, device name/nickname, PIN)."""
         if user_input is not None:
             device_name = (user_input.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
             raw_mac = (user_input.get(CONF_DEVICE_ADDRESS) or "").strip()
             pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
-            head_sec = max(1.0, min(120.0, float(user_input.get(CONF_HEAD_CALIBRATION_SEC, DEFAULT_HEAD_CALIBRATION_SEC))))
-            feet_sec = max(1.0, min(120.0, float(user_input.get(CONF_FEET_CALIBRATION_SEC, DEFAULT_FEET_CALIBRATION_SEC))))
 
             normalized_mac = _normalize_mac(raw_mac)
             if raw_mac and len(normalized_mac) != 12:
@@ -274,14 +281,21 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
 
             nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
+            addr = _format_mac_display(normalized_mac) if normalized_mac else ""
+            if addr and not await validate_pin(self.hass, addr, device_name, pin):
+                return self.async_show_form(
+                    step_id="manual",
+                    data_schema=STEP_USER_SCHEMA,
+                    errors={"base": "invalid_pin"},
+                )
             data = {
                 CONF_DEVICE_NAME: device_name,
                 CONF_PIN: pin,
-                CONF_HEAD_CALIBRATION_SEC: head_sec,
-                CONF_FEET_CALIBRATION_SEC: feet_sec,
+                CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
+                CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
             }
             if normalized_mac:
-                data[CONF_DEVICE_ADDRESS] = _format_mac_display(normalized_mac)
+                data[CONF_DEVICE_ADDRESS] = addr
             if nickname:
                 data[CONF_DEVICE_NICKNAME] = nickname
             title = _entry_title_from_data(data)
