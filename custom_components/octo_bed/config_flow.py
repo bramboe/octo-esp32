@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -35,7 +36,6 @@ STEP_USER_SCHEMA = vol.Schema(
         vol.Required(CONF_DEVICE_ADDRESS, default=""): str,
         vol.Optional(CONF_DEVICE_NICKNAME, default=""): str,
         vol.Required(CONF_PIN, default=DEFAULT_PIN): str,
-        vol.Required("pin_confirm", default=""): str,
     }
 )
 
@@ -112,67 +112,75 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         address: str = "",
     ) -> FlowResult:
         """Confirm and complete setup of a discovered device (PIN only; MAC/name come from discovery)."""
+        # Resuming after "Testing connection..." progress
+        task = getattr(self, "_confirm_validate_task", None)
+        if task is not None:
+            if not task.done():
+                return self.async_show_progress(
+                    progress_action="testing_connection",
+                    progress_task=task,
+                )
+            ok = task.result()
+            del self._confirm_validate_task
+            if ok:
+                pending = self._confirm_pending
+                data = {
+                    CONF_DEVICE_NAME: pending["name"],
+                    CONF_DEVICE_ADDRESS: pending["address"],
+                    CONF_PIN: pending["pin"],
+                    CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
+                    CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
+                }
+                if pending.get("nickname"):
+                    data[CONF_DEVICE_NICKNAME] = pending["nickname"]
+                self._pending_entry = (_entry_title_from_data(data), data)
+                return self.async_show_progress_done(next_step_id="create_entry")
+            self._confirm_validation_failed = True
+            return self.async_show_progress_done(next_step_id="confirm_bluetooth")
+
+        if getattr(self, "_confirm_validation_failed", False):
+            self._confirm_validation_failed = False
+            pending = getattr(self, "_confirm_pending", {})
+            return self.async_show_form(
+                step_id="confirm_bluetooth",
+                data_schema=vol.Schema({
+                    vol.Required(CONF_PIN, default=pending.get("pin", DEFAULT_PIN)): str,
+                    vol.Optional(CONF_DEVICE_NICKNAME, default=pending.get("nickname", "")): str,
+                }),
+                description_placeholders={
+                    "name": pending.get("name", "Octo Bed"),
+                    "address": pending.get("address", ""),
+                    "mac": pending.get("address", ""),
+                },
+                errors={"base": "invalid_pin"},
+            )
+
         if user_input is not None:
             name = self.context.get("discovered_name", name) or "Octo Bed"
             address = (self.context.get("discovered_address", address) or "").strip()
             if not address and self.unique_id:
-                address = self.unique_id  # set in async_step_bluetooth; survives context
+                address = self.unique_id
             if not address:
                 return await self.async_step_manual()
             pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
-            pin_confirm = (user_input.get("pin_confirm") or "").strip()[:4].ljust(4, "0")
             nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
-            if pin != pin_confirm:
-                return self.async_show_form(
-                    step_id="confirm_bluetooth",
-                    data_schema=vol.Schema({
-                        vol.Required(CONF_PIN, default=pin): str,
-                        vol.Required("pin_confirm", default=pin_confirm): str,
-                        vol.Optional(CONF_DEVICE_NICKNAME, default=nickname): str,
-                    }),
-                    description_placeholders={
-                        "name": name or "Octo Bed",
-                        "address": address,
-                        "mac": address,
-                    },
-                    errors={"base": "pin_mismatch"},
-                )
-            if not await validate_pin(self.hass, address, name or "Octo Bed", pin):
-                return self.async_show_form(
-                    step_id="confirm_bluetooth",
-                    data_schema=vol.Schema({
-                        vol.Required(CONF_PIN, default=pin): str,
-                        vol.Required("pin_confirm", default=pin_confirm): str,
-                        vol.Optional(CONF_DEVICE_NICKNAME, default=nickname): str,
-                    }),
-                    description_placeholders={
-                        "name": name or "Octo Bed",
-                        "address": address,
-                        "mac": address,
-                    },
-                    errors={"base": "invalid_pin"},
-                )
-            data = {
-                CONF_DEVICE_NAME: name or address,
-                CONF_DEVICE_ADDRESS: address,
-                CONF_PIN: pin,
-                CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
-                CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
-            }
-            if nickname:
-                data[CONF_DEVICE_NICKNAME] = nickname
-            title = _entry_title_from_data(data)
-            return self.async_create_entry(title=title, data=data)
+            self._confirm_pending = {"name": name or "Octo Bed", "address": address, "pin": pin, "nickname": nickname}
+            self._confirm_validate_task = self.hass.async_create_task(
+                validate_pin(self.hass, address, name or "Octo Bed", pin),
+            )
+            return self.async_show_progress(
+                progress_action="testing_connection",
+                progress_task=self._confirm_validate_task,
+            )
+
         self.context["discovered_name"] = name
         self.context["discovered_address"] = address
         if address and not self.unique_id:
-            await self.async_set_unique_id(address)  # so address can be recovered if context is lost on submit
-        # Show MAC in title so user knows which bed they're configuring
+            await self.async_set_unique_id(address)
         self.context["title_placeholders"] = {"name": f"{name or 'Octo Bed'} ({address})"}
         schema = vol.Schema(
             {
                 vol.Required(CONF_PIN, default=DEFAULT_PIN): str,
-                vol.Required("pin_confirm", default=""): str,
                 vol.Optional(CONF_DEVICE_NICKNAME, default=""): str,
             }
         )
@@ -185,6 +193,11 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "mac": address,
             },
         )
+
+    async def async_step_create_entry(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Create the config entry after successful PIN validation."""
+        title, data = self._pending_entry
+        return self.async_create_entry(title=title, data=data)
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial step: choose scan or manual."""
@@ -285,12 +298,53 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_manual(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Manual entry (device name, optional MAC, device name/nickname, PIN)."""
+        """Manual entry (device name, MAC, device name/nickname, PIN)."""
+        task = getattr(self, "_manual_validate_task", None)
+        if task is not None:
+            if not task.done():
+                return self.async_show_progress(
+                    progress_action="testing_connection",
+                    progress_task=task,
+                )
+            ok = task.result()
+            del self._manual_validate_task
+            if ok:
+                pending = self._manual_pending
+                data = {
+                    CONF_DEVICE_NAME: pending["device_name"],
+                    CONF_DEVICE_ADDRESS: pending["addr"],
+                    CONF_PIN: pending["pin"],
+                    CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
+                    CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
+                }
+                if pending.get("nickname"):
+                    data[CONF_DEVICE_NICKNAME] = pending["nickname"]
+                self._pending_entry = (_entry_title_from_data(data), data)
+                return self.async_show_progress_done(next_step_id="create_entry")
+            self._manual_validation_failed = True
+            return self.async_show_progress_done(next_step_id="manual")
+
+        if getattr(self, "_manual_validation_failed", False):
+            self._manual_validation_failed = False
+            pending = getattr(self, "_manual_pending", {})
+            schema = vol.Schema(
+                {
+                    vol.Required(CONF_DEVICE_NAME, default=pending.get("device_name", DEFAULT_DEVICE_NAME)): str,
+                    vol.Required(CONF_DEVICE_ADDRESS, default=pending.get("addr", "")): str,
+                    vol.Optional(CONF_DEVICE_NICKNAME, default=pending.get("nickname", "")): str,
+                    vol.Required(CONF_PIN, default=pending.get("pin", DEFAULT_PIN)): str,
+                }
+            )
+            return self.async_show_form(
+                step_id="manual",
+                data_schema=schema,
+                errors={"base": "invalid_pin"},
+            )
+
         if user_input is not None:
             device_name = (user_input.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
             raw_mac = (user_input.get(CONF_DEVICE_ADDRESS) or "").strip()
             pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
-            pin_confirm = (user_input.get("pin_confirm") or "").strip()[:4].ljust(4, "0")
 
             normalized_mac = _normalize_mac(raw_mac)
             if not raw_mac:
@@ -305,33 +359,17 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data_schema=STEP_USER_SCHEMA,
                     errors={"base": "invalid_mac"},
                 )
-            if pin != pin_confirm:
-                return self.async_show_form(
-                    step_id="manual",
-                    data_schema=STEP_USER_SCHEMA,
-                    errors={"base": "pin_mismatch"},
-                )
 
             nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
             addr = _format_mac_display(normalized_mac)
-            if not await validate_pin(self.hass, addr, device_name, pin):
-                return self.async_show_form(
-                    step_id="manual",
-                    data_schema=STEP_USER_SCHEMA,
-                    errors={"base": "invalid_pin"},
-                )
-            data = {
-                CONF_DEVICE_NAME: device_name,
-                CONF_PIN: pin,
-                CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
-                CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
-            }
-            if normalized_mac:
-                data[CONF_DEVICE_ADDRESS] = addr
-            if nickname:
-                data[CONF_DEVICE_NICKNAME] = nickname
-            title = _entry_title_from_data(data)
-            return self.async_create_entry(title=title, data=data)
+            self._manual_pending = {"device_name": device_name, "addr": addr, "pin": pin, "nickname": nickname}
+            self._manual_validate_task = self.hass.async_create_task(
+                validate_pin(self.hass, addr, device_name, pin),
+            )
+            return self.async_show_progress(
+                progress_action="testing_connection",
+                progress_task=self._manual_validate_task,
+            )
 
         return self.async_show_form(step_id="manual", data_schema=STEP_USER_SCHEMA)
 
