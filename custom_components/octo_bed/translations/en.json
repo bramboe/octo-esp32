@@ -40,7 +40,7 @@
       },
       "calibrate": {
         "title": "Calibration",
-        "description": "Device added. Use the **Start** and **Stop** buttons below (no dropdown). Use the **bed’s** BLE MAC (not the remote RC2) when using a Bluetooth proxy. {status}",
+        "description": "Device added. **Tap one of the options below** — there is no Submit button. Tap **Start head**, **Start feet**, **Stop**, or **Done**. Use the **bed’s** BLE MAC (not the remote RC2) when using a Bluetooth proxy. {status}",
         "data": {}
       },
       "calibrate_head": {
