@@ -656,8 +656,8 @@ async def validate_pin(
         if not write_ok:
             _LOGGER.warning("PIN validation: keep-alive write failed for %s (wrong PIN or not bed base?)", addr)
             return False
-        # Give device time to disconnect us if PIN was wrong
-        await asyncio.sleep(2.0)
+        # Give device time to disconnect us if PIN was wrong (some firmwares take a few seconds)
+        await asyncio.sleep(5.0)
         if not client.is_connected:
             _LOGGER.warning("PIN validation: device disconnected after keep-alive (wrong PIN?)")
             return False
