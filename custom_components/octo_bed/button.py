@@ -7,6 +7,7 @@ import logging
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -59,7 +60,7 @@ class OctoBedCalibrateHeadButton(OctoBedEntity, ButtonEntity):
     _attr_name = "Calibrate Head"
     _attr_unique_id = "calibrate_head"
     _attr_icon = "mdi:ruler"
-    _attr_entity_category = "config"
+    _attr_entity_category = EntityCategory.CONFIG
 
     async def async_press(self) -> None:
         await self.coordinator.async_start_calibration_head()
@@ -72,7 +73,7 @@ class OctoBedCalibrateFeetButton(OctoBedEntity, ButtonEntity):
     _attr_name = "Calibrate Feet"
     _attr_unique_id = "calibrate_feet"
     _attr_icon = "mdi:ruler"
-    _attr_entity_category = "config"
+    _attr_entity_category = EntityCategory.CONFIG
 
     async def async_press(self) -> None:
         await self.coordinator.async_start_calibration_feet()
@@ -85,7 +86,7 @@ class OctoBedCalibrationStopButton(OctoBedEntity, ButtonEntity):
     _attr_name = "Calibration Stop"
     _attr_unique_id = "calibration_stop"
     _attr_icon = "mdi:check-circle-outline"
-    _attr_entity_category = "config"
+    _attr_entity_category = EntityCategory.CONFIG
 
     async def async_press(self) -> None:
         ok, head_sec, feet_sec = await self.coordinator.async_stop_calibration()
@@ -105,7 +106,7 @@ class OctoBedResetBleButton(OctoBedEntity, ButtonEntity):
     _attr_name = "Reset BLE Connection"
     _attr_unique_id = "reset_ble"
     _attr_icon = "mdi:bluetooth-refresh"
-    _attr_entity_category = "config"
+    _attr_entity_category = EntityCategory.CONFIG
 
     async def async_press(self) -> None:
         self.coordinator.reset_ble_connection()
