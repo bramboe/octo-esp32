@@ -616,6 +616,18 @@ def _normalize_addr(address: str) -> str:
     return "".join(c for c in address.strip() if c in "0123456789AaBbCcDdEeFf").upper()
 
 
+async def validate_pin(
+    hass: HomeAssistant,
+    address: str,
+    device_name: str,
+    pin: str,
+) -> bool:
+    """Connect to the device and send keep-alive with PIN. Returns True if accepted (PIN correct)."""
+    pin = (pin or "0000").strip()[:4].ljust(4, "0")
+    data = _make_keep_alive(pin)
+    return await send_single_command(hass, address, device_name or "Octo Bed", data)
+
+
 async def send_single_command(
     hass: HomeAssistant,
     address: str,
