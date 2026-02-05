@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
     BLE_CHAR_UUID,
+    CONF_DEVICE_ADDRESS,
     CONNECT_TIMEOUT,
     CMD_BOTH_DOWN,
     CMD_BOTH_UP,
@@ -146,14 +147,18 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def calibration_active(self) -> bool:
         return self._calibration_active
 
+    def _address_present(self, addr: str | None) -> bool:
+        """True if any adapter (including Bluetooth proxy) has seen this address."""
+        if not addr:
+            return False
+        return (
+            bluetooth.async_address_present(self.hass, addr, connectable=True)
+            or bluetooth.async_address_present(self.hass, addr, connectable=False)
+        )
+
     def _data(self) -> dict[str, Any]:
         addr = self.device_address
-        connected = (
-            addr is not None
-            and bluetooth.async_address_present(
-                self.hass, addr, connectable=True
-            )
-        )
+        connected = addr is not None and self._address_present(addr)
         return {
             "head_position": self._head_position,
             "feet_position": self._feet_position,
@@ -169,7 +174,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Ensure we have a device address (from discovery if needed)."""
         addr = self.device_address
         if addr:
-            if bluetooth.async_address_present(self.hass, addr, connectable=True):
+            if self._address_present(addr):
                 return self._data()
             _LOGGER.debug("Device %s not present, will retry discovery", addr)
         await self._async_ensure_address()
@@ -179,17 +184,41 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Resolve device address from config or discovery."""
         addr = self.device_address
         if addr:
-            if bluetooth.async_address_present(self.hass, addr, connectable=True):
+            if self._address_present(addr):
                 return
             _LOGGER.warning("Configured address %s not seen by any Bluetooth adapter", addr)
-        # Discover by name
-        infos = bluetooth.async_discovered_service_info(self.hass, connectable=True)
-        for info in infos:
-            if info.name and self._device_name and info.name.strip().upper() == self._device_name.strip().upper():
-                self._device_address = info.address
-                _LOGGER.info("Discovered Octo Bed remote at %s (name: %s)", info.address, info.name)
-                return
+        # Discover by name (check both connectable and non-connectable, e.g. proxy)
+        infos_conn = bluetooth.async_discovered_service_info(self.hass, connectable=True)
+        infos_any = bluetooth.async_discovered_service_info(self.hass, connectable=False)
+        seen_addrs: set[str] = set()
+        for info in infos_conn:
+            addr_key = (info.address or "").upper().replace(":", "")
+            if addr_key and addr_key not in seen_addrs:
+                seen_addrs.add(addr_key)
+                if info.name and self._device_name and info.name.strip().upper() == self._device_name.strip().upper():
+                    self._device_address = info.address
+                    self._persist_device_address(info.address)
+                    _LOGGER.info("Discovered Octo Bed remote at %s (name: %s)", info.address, info.name)
+                    return
+        for info in infos_any:
+            addr_key = (info.address or "").upper().replace(":", "")
+            if addr_key and addr_key not in seen_addrs:
+                seen_addrs.add(addr_key)
+                if info.name and self._device_name and info.name.strip().upper() == self._device_name.strip().upper():
+                    self._device_address = info.address
+                    self._persist_device_address(info.address)
+                    _LOGGER.info("Discovered Octo Bed remote at %s (name: %s)", info.address, info.name)
+                    return
         _LOGGER.debug("No device named %s found; ensure remote is on and in range of Bluetooth Proxy", self._device_name)
+
+    def _persist_device_address(self, address: str) -> None:
+        """Save discovered MAC to config entry so it survives reload/restart."""
+        if not address or self._entry.data.get(CONF_DEVICE_ADDRESS) == address:
+            return
+        self.hass.config_entries.async_update_entry(
+            self._entry,
+            data={**self._entry.data, CONF_DEVICE_ADDRESS: address},
+        )
 
     def _get_ble_device(self):
         """Get BLEDevice for current address (from Bluetooth Proxy or local adapter)."""
@@ -315,9 +344,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             while True:
                 await asyncio.sleep(KEEP_ALIVE_INTERVAL_SEC)
                 addr = self.device_address
-                if addr and bluetooth.async_address_present(
-                    self.hass, addr, connectable=True
-                ):
+                if addr and self._address_present(addr):
                     await self.async_send_keep_alive()
                     _LOGGER.debug("Keep-alive sent to %s", addr)
         except asyncio.CancelledError:
