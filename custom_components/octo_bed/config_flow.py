@@ -86,16 +86,21 @@ def _normalize_calibrate_action(submitted: str) -> str:
 
 
 def _calibrate_schema() -> vol.Schema:
-    """Schema for calibration step: action dropdown. Must use vol.In only so voluptuous_serialize can convert it for the frontend."""
+    """Schema for calibration step. Accept both keys and labels so frontend submission always passes validation."""
+    options = {
+        "": "— Choose an action —",
+        "head": "▶ Start head calibration",
+        "feet": "▶ Start feet calibration",
+        "stop": "■ Stop calibration",
+        "done": "Done — finish setup",
+    }
+    # Allow labels as valid values too (frontend may submit display string instead of key)
+    valid = dict(options)
+    for label in options.values():
+        valid[label] = label
     return vol.Schema(
         {
-            vol.Required("action", default=""): vol.In({
-                "": "— Choose an action —",
-                "head": "▶ Start head calibration",
-                "feet": "▶ Start feet calibration",
-                "stop": "■ Stop calibration",
-                "done": "Done — finish setup",
-            }),
+            vol.Required("action", default=""): vol.In(valid),
         }
     )
 
@@ -259,6 +264,12 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.info("Calibrate step: user_input=%s raw=%r -> action=%r address=%s", user_input, raw, action, address or "(none)")
             if action == "head" and address:
                 start_standalone_calibration(self.hass, address, device_name, head=True)
+                persistent_notification.async_create(
+                    self.hass,
+                    "Head calibration **started**. Click **Stop calibration** when fully up, then **Done** in the setup dialog.",
+                    title="Octo Bed – Head calibration",
+                    notification_id="octo_bed_calibration_action",
+                )
                 return self.async_show_form(
                     step_id="calibrate",
                     data_schema=_calibrate_schema(),
@@ -266,6 +277,12 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
             if action == "feet" and address:
                 start_standalone_calibration(self.hass, address, device_name, head=False)
+                persistent_notification.async_create(
+                    self.hass,
+                    "Feet calibration **started**. Click **Stop calibration** when fully up, then **Done** in the setup dialog.",
+                    title="Octo Bed – Feet calibration",
+                    notification_id="octo_bed_calibration_action",
+                )
                 return self.async_show_form(
                     step_id="calibrate",
                     data_schema=_calibrate_schema(),
@@ -274,6 +291,12 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if action == "stop" and address:
                 stop_standalone_calibration(self.hass, address)
                 await send_single_command(self.hass, address, device_name, CMD_STOP)
+                persistent_notification.async_create(
+                    self.hass,
+                    "Calibration **stopped**.",
+                    title="Octo Bed",
+                    notification_id="octo_bed_calibration_action",
+                )
                 return self.async_show_form(
                     step_id="calibrate",
                     data_schema=_calibrate_schema(),
@@ -286,6 +309,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     description_placeholders={"status": "No device address — add MAC in manual setup, or click Done and calibrate from the device page later."},
                 )
             if action == "done":
+                persistent_notification.async_dismiss(self.hass, "octo_bed_calibration_action")
                 if address:
                     stop_standalone_calibration(self.hass, address)
                     await send_single_command(self.hass, address, device_name, CMD_STOP)
