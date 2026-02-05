@@ -18,25 +18,30 @@
       },
       "manual": {
         "title": "Octo Bed details",
-        "description": "Enter remote name (e.g. RC2) and optional MAC. Leave MAC empty to discover by name. Head and feet full travel can be set in device configuration after adding.",
+        "description": "Enter remote name (e.g. RC2) and optional MAC. Leave MAC empty to discover by name. Optionally give the device a name for the overview.",
         "data": {
           "device_name": "Remote name",
           "device_address": "MAC address (optional)",
+          "device_nickname": "Device name (optional)",
           "pin": "PIN (4 digits)"
         }
       },
       "confirm_bluetooth": {
         "title": "Add {name}",
-        "description": "Set PIN for this bed. MAC: {mac} Head and feet full travel can be set in device configuration after adding.",
+        "description": "Set PIN for this bed. MAC: {mac} Optionally give the device a name (e.g. Living room bed).",
         "data": {
-          "pin": "PIN (4 digits)"
+          "pin": "PIN (4 digits)",
+          "device_nickname": "Device name (optional)"
         }
       },
       "init": {
         "title": "Calibration",
         "data": {
           "head_calibration_seconds": "Head full travel (seconds)",
-          "feet_calibration_seconds": "Feet full travel (seconds)"
+          "feet_calibration_seconds": "Feet full travel (seconds)",
+          "device_nickname": "Device name (optional)",
+          "device_address": "MAC address (optional)",
+          "pin": "PIN (4 digits)"
         }
       }
     },
