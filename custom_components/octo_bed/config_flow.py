@@ -126,6 +126,15 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ok = False
             del self._confirm_validate_task
             if ok:
+                # Second check: ensure device still accepts PIN (catches slow disconnect)
+                pending = self._confirm_pending
+                ok2 = await validate_pin(
+                    self.hass, pending["address"], pending["name"], pending["pin"]
+                )
+                if not ok2:
+                    _LOGGER.info("PIN validation: second check failed (wrong PIN)")
+                    ok = False
+            if ok:
                 pending = self._confirm_pending
                 data = {
                     CONF_DEVICE_NAME: pending["name"],
@@ -314,6 +323,14 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except Exception:
                 ok = False
             del self._manual_validate_task
+            if ok:
+                pending = self._manual_pending
+                ok2 = await validate_pin(
+                    self.hass, pending["addr"], pending["device_name"], pending["pin"]
+                )
+                if not ok2:
+                    _LOGGER.info("PIN validation: second check failed (wrong PIN)")
+                    ok = False
             if ok:
                 pending = self._manual_pending
                 data = {
