@@ -1,0 +1,79 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add Octo Bed",
+        "description": "Search for nearby beds (via Bluetooth proxy) or enter details manually.",
+        "data": {
+          "next_step": "How do you want to add your bed?"
+        }
+      },
+      "scan": {
+        "title": "Search for beds",
+        "description": "Select a device (MAC shown first to differentiate beds). Found {count} device(s).",
+        "data": {
+          "picked": "Device",
+          "continue_manual": "No devices found"
+        }
+      },
+      "manual": {
+        "title": "Octo Bed details",
+        "description": "Enter remote name (e.g. RC2) and the bed's BLE MAC address. We'll test the connection with your PIN before adding. Optionally give the device a name for the overview.",
+        "data": {
+          "device_name": "Remote name",
+          "device_address": "MAC address (required)",
+          "device_nickname": "Device name (optional)",
+          "pin": "PIN (4 digits)"
+        }
+      },
+      "testing_connection": "Testing connection to bed…",
+      "confirm_bluetooth": {
+        "title": "Set PIN for bed",
+        "description": "Set PIN for this bed. We'll test the connection before adding. MAC: {mac} Optionally give the device a name (e.g. Living room bed).",
+        "data": {
+          "pin": "PIN (4 digits)",
+          "device_nickname": "Device name (optional)"
+        }
+      },
+      "calibrate": {
+        "title": "Calibration",
+        "description": "Device added. Choose an action below (buttons). Use the **bed's** BLE MAC (not the remote RC2) when using a Bluetooth proxy. {status}",
+        "data": {
+          "next_step_id": "Action"
+        }
+      },
+      "calibrate_head": {
+        "title": "Start calibrating head"
+      },
+      "calibrate_feet": {
+        "title": "Start calibrating feet"
+      },
+      "calibrate_stop": {
+        "title": "Stop"
+      },
+      "calibrate_done": {
+        "title": "Not now"
+      },
+      "init": {
+        "title": "Calibration",
+        "data": {
+          "head_calibration_seconds": "Head full travel (seconds)",
+          "feet_calibration_seconds": "Feet full travel (seconds)",
+          "device_nickname": "Device name (optional)",
+          "device_address": "MAC address (optional)",
+          "pin": "PIN (4 digits)"
+        }
+      }
+    },
+    "error": {
+      "invalid_mac": "MAC must be exactly 12 hex characters (e.g. AA:BB:CC:DD:EE:FF)",
+      "mac_required": "Enter the bed's BLE MAC address (12 hex characters) to verify the PIN before adding.",
+      "invalid_pin": "Wrong PIN or could not connect. Check the PIN and try again. Use the bed base BLE MAC, not the remote (RC2).",
+      "no_devices_found": "No Octo Bed remotes found. Ensure remotes are on and in range of your Bluetooth proxy."
+    },
+    "abort": {
+      "already_configured": "This device is already configured.",
+      "calibration_complete": "Setup complete. You can calibrate the bed anytime from the device."
+    }
+  }
+}
