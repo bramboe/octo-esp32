@@ -1,4 +1,4 @@
-"""Button entities for Octo Bed (stop, search, keep-alive, calibration, reset BLE)."""
+"""Button entities for Octo Bed (stop, calibration, reset BLE)."""
 
 from __future__ import annotations
 
@@ -31,27 +31,6 @@ class OctoBedStopButton(OctoBedEntity, ButtonEntity):
         await self.coordinator.async_send_stop()
         self.coordinator.set_movement_active(False)
         self.async_write_ha_state()
-
-
-class OctoBedSearchButton(OctoBedEntity, ButtonEntity):
-    """Trigger discovery for the bed remote."""
-
-    _attr_name = "Search for Device"
-    _attr_unique_id = "search_device"
-
-    async def async_press(self) -> None:
-        await self.coordinator.async_ensure_address_from_discovery()
-        self.async_write_ha_state()
-
-
-class OctoBedKeepAliveButton(OctoBedEntity, ButtonEntity):
-    """Send keep-alive (PIN) to the remote."""
-
-    _attr_name = "Send Keep-Alive"
-    _attr_unique_id = "keep_alive"
-
-    async def async_press(self) -> None:
-        await self.coordinator.async_send_keep_alive()
 
 
 class OctoBedCalibrateHeadButton(OctoBedEntity, ButtonEntity):
@@ -123,8 +102,6 @@ async def async_setup_entry(
     coordinator: OctoBedCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([
         OctoBedStopButton(coordinator, entry),
-        OctoBedSearchButton(coordinator, entry),
-        OctoBedKeepAliveButton(coordinator, entry),
         OctoBedCalibrateHeadButton(coordinator, entry),
         OctoBedCalibrateFeetButton(coordinator, entry),
         OctoBedCalibrationStopButton(coordinator, entry),
