@@ -22,6 +22,11 @@ class OctoBedEntity(CoordinatorEntity[OctoBedCoordinator], Entity):
             manufacturer="Octo Bed",
             model="BLE Remote",
         )
+        # Ensure unique_id is scoped to this config entry (avoids duplicates with multiple beds)
+        if getattr(self, "_attr_unique_id", None) and not str(
+            self._attr_unique_id
+        ).startswith(entry.entry_id):
+            self._attr_unique_id = f"{entry.entry_id}_{self._attr_unique_id}"
 
     @property
     def available(self) -> bool:
