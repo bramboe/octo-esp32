@@ -111,7 +111,8 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
         self.context["discovered_name"] = name
         self.context["discovered_address"] = address
-        self.context["title_placeholders"] = {"name": name or address}
+        # Show MAC in title so user knows which bed they're configuring
+        self.context["title_placeholders"] = {"name": f"{name or 'Octo Bed'} ({address})"}
         schema = vol.Schema(
             {
                 vol.Required(CONF_PIN, default=DEFAULT_PIN): str,
@@ -122,7 +123,11 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="confirm_bluetooth",
             data_schema=schema,
-            description_placeholders={"name": name or address, "address": address},
+            description_placeholders={
+                "name": name or "Octo Bed",
+                "address": address,
+                "mac": address,
+            },
         )
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
@@ -165,8 +170,8 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             name = (info.name or "").strip()
             if has_service or (name and (name.upper() == "RC2" or "octo" in name.lower())):
                 seen.add(addr)
-                # Label for dropdown, value is "name|address" for parsing
-                label = f"{name or 'Unknown'} ({info.address})"
+                # Label: show MAC first so user can differentiate between beds
+                label = f"{info.address} — {name or 'Octo Bed'}"
                 value = f"{name or info.address}|{info.address}"
                 devices.append((label, value))
         if not devices:
