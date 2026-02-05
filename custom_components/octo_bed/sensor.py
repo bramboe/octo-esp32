@@ -27,7 +27,7 @@ class OctoBedConnectionSensor(OctoBedEntity, SensorEntity):
         if data.get("connected"):
             return "connected"
         if not self.coordinator.device_address:
-            return "Searching for device"
+            return "searching for device"
         return "disconnected"
 
     @property
