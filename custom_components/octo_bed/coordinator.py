@@ -39,6 +39,41 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+async def send_command_to_device(
+    hass: HomeAssistant,
+    address: str,
+    device_name: str,
+    data: bytes,
+) -> bool:
+    """Send a single BLE command to a device by address (e.g. from config flow). Returns True on success."""
+    if not address or not address.strip():
+        return False
+    address = address.strip()
+    ble_device = bluetooth.async_ble_device_from_address(hass, address, connectable=True)
+    if ble_device is None:
+        ble_device = bluetooth.async_ble_device_from_address(hass, address, connectable=False)
+    if not ble_device:
+        _LOGGER.warning("No BLE device for address %s", address)
+        return False
+    client = None
+    try:
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            ble_device,
+            device_name or "Octo Bed",
+            disconnected_callback=None,
+            timeout=CONNECT_TIMEOUT,
+        )
+        await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
+        return True
+    except Exception as e:
+        _LOGGER.warning("BLE write to %s failed: %s", address, e)
+        return False
+    finally:
+        if client:
+            await client.disconnect()
+
+
 def _make_keep_alive(pin: str) -> bytes:
     """Build keep-alive packet with 4-digit PIN."""
     pin = (pin or "0000").strip()
