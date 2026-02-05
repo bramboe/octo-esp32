@@ -120,7 +120,10 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     progress_action="testing_connection",
                     progress_task=task,
                 )
-            ok = task.result()
+            try:
+                ok = task.result()
+            except Exception:
+                ok = False
             del self._confirm_validate_task
             if ok:
                 pending = self._confirm_pending
@@ -306,7 +309,10 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     progress_action="testing_connection",
                     progress_task=task,
                 )
-            ok = task.result()
+            try:
+                ok = task.result()
+            except Exception:
+                ok = False
             del self._manual_validate_task
             if ok:
                 pending = self._manual_pending
