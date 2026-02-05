@@ -99,7 +99,9 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Confirm and complete setup of a discovered device."""
         if user_input is not None:
             name = self.context.get("discovered_name", name)
-            address = self.context.get("discovered_address", address)
+            address = (self.context.get("discovered_address", address) or "").strip()
+            if not address:
+                return await self.async_step_manual()
             pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
             data = {
                 CONF_DEVICE_NAME: name or address,
@@ -108,10 +110,8 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
                 CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
             }
-            return self.async_create_entry(
-                title=f"Octo Bed ({name or address})",
-                data=data,
-            )
+            title = f"Octo Bed ({name or address})"
+            return self.async_create_entry(title=title, data=data)
         self.context["discovered_name"] = name
         self.context["discovered_address"] = address
         # Show MAC in title so user knows which bed they're configuring
@@ -253,7 +253,10 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if normalized_mac:
                 data[CONF_DEVICE_ADDRESS] = _format_mac_display(normalized_mac)
 
-            return self.async_create_entry(title=f"Octo Bed ({device_name})", data=data)
+            title = f"Octo Bed ({device_name})"
+            if normalized_mac:
+                title = f"Octo Bed ({device_name} — {_format_mac_display(normalized_mac)})"
+            return self.async_create_entry(title=title, data=data)
 
         return self.async_show_form(step_id="manual", data_schema=STEP_USER_SCHEMA)
 
