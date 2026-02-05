@@ -70,6 +70,7 @@
     },
     "error": {
       "invalid_mac": "MAC must be exactly 12 hex characters (e.g. AA:BB:CC:DD:EE:FF)",
+      "invalid_pin": "Wrong PIN or could not connect. Check the PIN and try again.",
       "no_devices_found": "No Octo Bed remotes found. Ensure remotes are on and in range of your Bluetooth proxy."
     },
     "abort": {
