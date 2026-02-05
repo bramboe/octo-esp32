@@ -40,7 +40,7 @@
       },
       "calibrate": {
         "title": "Calibration",
-        "description": "Device added. Choose an action below and click **Submit**. Use the **bed’s** BLE MAC (not the remote RC2) when using a Bluetooth proxy. {status}",
+        "description": "Device added. Choose an action below (buttons). Use the **bed’s** BLE MAC (not the remote RC2) when using a Bluetooth proxy. {status}",
         "data": {
           "next_step_id": "Action"
         }
