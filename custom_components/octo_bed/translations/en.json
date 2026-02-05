@@ -2,11 +2,35 @@
   "config": {
     "step": {
       "user": {
-        "title": "Octo Bed remote",
-        "description": "Connect using your existing Bluetooth Proxy. Leave device address empty to discover by name (e.g. RC2).",
+        "title": "Add Octo Bed",
+        "description": "Search for nearby beds (via Bluetooth proxy) or enter details manually.",
+        "data": {
+          "next_step": "How do you want to add your bed?"
+        }
+      },
+      "scan": {
+        "title": "Search for beds",
+        "description": "Select a discovered Octo Bed remote. Found {count} device(s).",
+        "data": {
+          "picked": "Device",
+          "continue_manual": "No devices found"
+        }
+      },
+      "manual": {
+        "title": "Octo Bed details",
+        "description": "Enter remote name (e.g. RC2) and optional MAC. Leave MAC empty to discover by name.",
         "data": {
           "device_name": "Remote name",
           "device_address": "MAC address (optional)",
+          "pin": "PIN (4 digits)",
+          "head_calibration_seconds": "Head full travel (seconds)",
+          "feet_calibration_seconds": "Feet full travel (seconds)"
+        }
+      },
+      "confirm_bluetooth": {
+        "title": "Add {name}",
+        "description": "Configure PIN and calibration for {name} ({address}).",
+        "data": {
           "pin": "PIN (4 digits)",
           "head_calibration_seconds": "Head full travel (seconds)",
           "feet_calibration_seconds": "Feet full travel (seconds)"
@@ -21,7 +45,11 @@
       }
     },
     "error": {
-      "invalid_mac": "MAC must be exactly 12 hex characters (e.g. AA:BB:CC:DD:EE:FF)"
+      "invalid_mac": "MAC must be exactly 12 hex characters (e.g. AA:BB:CC:DD:EE:FF)",
+      "no_devices_found": "No Octo Bed remotes found. Ensure remotes are on and in range of your Bluetooth proxy."
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
     }
   }
 }
