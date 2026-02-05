@@ -31,7 +31,7 @@ class OctoBedCalibrationActiveBinarySensor(OctoBedEntity, BinarySensorEntity):
 
 
 class OctoBedConnectionBinarySensor(OctoBedEntity, BinarySensorEntity):
-    """Connection status (on = remote seen by Bluetooth)."""
+    """Connection status (on = remote seen by Bluetooth). When off, status attribute shows 'Searching for device' or 'Disconnected'."""
 
     _attr_name = "Connection status"
     _attr_unique_id = "connection_status"
@@ -40,6 +40,14 @@ class OctoBedConnectionBinarySensor(OctoBedEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         return bool((self.coordinator.data or {}).get("connected"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        if self.is_on:
+            return {}
+        if not self.coordinator.device_address:
+            return {"status": "Searching for device"}
+        return {"status": "Disconnected"}
 
     @property
     def available(self) -> bool:
