@@ -622,10 +622,41 @@ async def validate_pin(
     device_name: str,
     pin: str,
 ) -> bool:
-    """Connect to the device and send keep-alive with PIN. Returns True if accepted (PIN correct)."""
+    """Connect, send keep-alive with PIN, then verify device still accepts commands. Returns True only if PIN is accepted."""
     pin = (pin or "0000").strip()[:4].ljust(4, "0")
-    data = _make_keep_alive(pin)
-    return await send_single_command(hass, address, device_name or "Octo Bed", data)
+    addr = address and address.strip()
+    if not addr:
+        return False
+    ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=True)
+    if ble_device is None:
+        ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=False)
+    if not ble_device:
+        _LOGGER.warning("PIN validation: no BLE device for %s", addr)
+        return False
+    client = None
+    try:
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            ble_device,
+            device_name or "Octo Bed",
+            disconnected_callback=None,
+            timeout=CONNECT_TIMEOUT,
+        )
+        keep_alive = _make_keep_alive(pin)
+        try:
+            await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
+        except Exception:
+            await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+        # Give device time to disconnect us if PIN was wrong
+        await asyncio.sleep(2.0)
+        await client.write_gatt_char(BLE_CHAR_UUID, CMD_STOP, response=False)
+        return True
+    except Exception as e:
+        _LOGGER.warning("PIN validation failed for %s: %s", addr, e)
+        return False
+    finally:
+        if client:
+            await client.disconnect()
 
 
 async def send_single_command(
