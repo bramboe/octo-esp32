@@ -38,12 +38,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async_setup_services(hass)
 
-    # Start keep-alive loop only after HA has finished starting (avoids blocking bootstrap)
+    # Start keep-alive loop only after HA has finished starting (avoids blocking bootstrap).
+    # Must schedule on the event loop: EVENT_HOMEASSISTANT_STARTED can fire from a thread.
     def _start_keep_alive(_event=None) -> None:
-        coordinator.start_keep_alive_loop()
+        hass.loop.call_soon_threadsafe(coordinator.start_keep_alive_loop)
 
     if hass.is_running:
-        _start_keep_alive()
+        coordinator.start_keep_alive_loop()
     else:
         entry.async_on_unload(
             hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _start_keep_alive)
