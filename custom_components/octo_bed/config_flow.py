@@ -59,13 +59,17 @@ _CALIBRATE_ACTION_MAP = {
     "■ stop calibration": "stop",
     "done — finish setup": "done",
 }
+_CALIBRATE_ACTION_INDEX = ["", "head", "feet", "stop", "done"]
 
 
 def _normalize_calibrate_action(submitted: str) -> str:
     """Return canonical action 'head'|'feet'|'stop'|'done'|'' from submitted value or label."""
-    s = (submitted or "").strip()
+    s = (submitted if isinstance(submitted, str) else str(submitted or "")).strip()
     if not s:
         return ""
+    # Index as string "0"-"4"
+    if s in ("0", "1", "2", "3", "4"):
+        return _CALIBRATE_ACTION_INDEX[int(s)]
     key = s.lower()
     if key in _CALIBRATE_ACTION_MAP:
         return _CALIBRATE_ACTION_MAP[key]
@@ -82,7 +86,7 @@ def _normalize_calibrate_action(submitted: str) -> str:
 
 
 def _calibrate_schema() -> vol.Schema:
-    """Schema for calibration step: action dropdown. Include both keys and labels as valid so frontend can submit either."""
+    """Schema for calibration step: action dropdown. Accept any string so we always receive submission and normalize in code."""
     options = {
         "": "— Choose an action —",
         "head": "▶ Start head calibration",
@@ -90,13 +94,9 @@ def _calibrate_schema() -> vol.Schema:
         "stop": "■ Stop calibration",
         "done": "Done — finish setup",
     }
-    # Some frontends submit the display label instead of the key; allow both so validation never fails
-    valid = dict(options)
-    for label in options.values():
-        valid[label] = label
     return vol.Schema(
         {
-            vol.Required("action", default=""): vol.In(valid),
+            vol.Required("action", default=""): vol.Any(vol.In(options), str),
         }
     )
 
@@ -251,9 +251,13 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         device_name = (pending.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
 
         if user_input is not None:
-            raw = (user_input.get("action") or "").strip()
+            raw = user_input.get("action")
+            if isinstance(raw, int):
+                # Frontend may send option index (0–4)
+                raw = _CALIBRATE_ACTION_INDEX[raw] if 0 <= raw < len(_CALIBRATE_ACTION_INDEX) else ""
+            raw = (raw or "").strip() if isinstance(raw, str) else ""
             action = _normalize_calibrate_action(raw)
-            _LOGGER.debug("Calibrate step: raw=%r -> action=%r, address=%s", raw, action, address or "(none)")
+            _LOGGER.info("Calibrate step: user_input=%s raw=%r -> action=%r address=%s", user_input, raw, action, address or "(none)")
             if action == "head" and address:
                 start_standalone_calibration(self.hass, address, device_name, head=True)
                 return self.async_show_form(
@@ -291,6 +295,12 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if data and title:
                     return self.async_create_entry(title=title, data=data)
                 return self.async_abort(reason="calibration_complete")
+            # Submitted but action not recognized or "Choose an action" — show hint
+            return self.async_show_form(
+                step_id="calibrate",
+                data_schema=_calibrate_schema(),
+                description_placeholders={"status": "Please select an action (e.g. Start head calibration or Done) and click Submit."},
+            )
 
         return self.async_show_form(
             step_id="calibrate",
