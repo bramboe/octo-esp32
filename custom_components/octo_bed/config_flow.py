@@ -167,11 +167,14 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Handle the initial step: choose scan or manual; or calibration step after add."""
-        if self.context.get("source") == "calibration_setup":
-            return await self._async_step_calibrate_setup(user_input)
+    async def async_step_calibration_setup(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Initial step when flow is started for post-add calibration (HA uses context source as step_id)."""
+        return await self._async_step_calibrate_setup(user_input)
 
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Handle the initial step: choose scan or manual."""
         if user_input is not None:
             if user_input.get("next_step") == "scan":
                 return await self.async_step_scan()
