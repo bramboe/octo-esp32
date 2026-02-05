@@ -40,7 +40,7 @@
       },
       "calibrate": {
         "title": "Calibration",
-        "description": "Use the buttons below to move the bed head or feet up, or stop. When calibration is done, choose **Done — finish setup** and submit.",
+        "description": "Device added. Choose an action below and click **Submit** to start head or feet calibration, stop movement, or finish setup. {status}",
         "data": {
           "action": "Action"
         }
