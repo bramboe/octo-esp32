@@ -7,7 +7,7 @@ import logging
 from datetime import timedelta
 from typing import Any, Callable
 
-from bleak import BleakClient
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -258,17 +258,23 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 _LOGGER.debug("Octo Bed: no address configured, skipping BLE command")
             return False
+        client = None
         try:
-            async with BleakClient(
+            client = await establish_connection(
+                BleakClientWithServiceCache,
                 ble_device,
-                timeout=CONNECT_TIMEOUT,
+                self._device_name or "Octo Bed",
                 disconnected_callback=None,
-            ) as client:
-                await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
+                timeout=CONNECT_TIMEOUT,
+            )
+            await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
+            return True
         except Exception as e:
             _LOGGER.warning("BLE write failed: %s", e)
             return False
-        return True
+        finally:
+            if client:
+                await client.disconnect()
 
     async def async_send_stop(self) -> bool:
         """Send stop command."""
@@ -305,20 +311,23 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.set_movement_active(False)
             return
         self.set_movement_active(True)
+        client = None
         try:
-            async with BleakClient(
+            client = await establish_connection(
+                BleakClientWithServiceCache,
                 ble_device,
-                timeout=CONNECT_TIMEOUT,
+                self._device_name or "Octo Bed",
                 disconnected_callback=None,
-            ) as client:
-                while not is_cancelled():
-                    await client.write_gatt_char(
-                        BLE_CHAR_UUID, command, response=False
-                    )
-                    await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+                timeout=CONNECT_TIMEOUT,
+            )
+            while not is_cancelled():
                 await client.write_gatt_char(
-                    BLE_CHAR_UUID, CMD_STOP, response=False
+                    BLE_CHAR_UUID, command, response=False
                 )
+                await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+            await client.write_gatt_char(
+                BLE_CHAR_UUID, CMD_STOP, response=False
+            )
         except asyncio.CancelledError:
             await self._send_command(CMD_STOP)
             raise
@@ -326,6 +335,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("Movement loop BLE error: %s", e)
             await self._send_command(CMD_STOP)
         finally:
+            if client:
+                await client.disconnect()
             self.set_movement_active(False)
 
     async def async_set_head_position(self, position: float) -> bool:
