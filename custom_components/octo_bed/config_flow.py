@@ -227,15 +227,14 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_calibrate_head(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Start head calibration then show menu again."""
+        """Start head calibration then show menu again (notification shows elapsed time and progress)."""
         _pending, address, device_name = self._calibrate_pending()
         if address:
-            start_standalone_calibration(self.hass, address, device_name, head=True)
-            persistent_notification.async_create(
-                self.hass,
-                "Head calibration **started**. Click **Stop** when fully up, then **Not now** to finish setup.",
-                title="Octo Bed – Head calibration",
-                notification_id="octo_bed_calibration_action",
+            head_sec = _pending.get(CONF_HEAD_CALIBRATION_SEC, DEFAULT_HEAD_CALIBRATION_SEC)
+            feet_sec = _pending.get(CONF_FEET_CALIBRATION_SEC, DEFAULT_FEET_CALIBRATION_SEC)
+            start_standalone_calibration(
+                self.hass, address, device_name, head=True,
+                head_sec=float(head_sec), feet_sec=float(feet_sec),
             )
         return self.async_show_menu(
             step_id="calibrate",
@@ -246,15 +245,14 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_calibrate_feet(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Start feet calibration then show menu again."""
+        """Start feet calibration then show menu again (notification shows elapsed time and progress)."""
         _pending, address, device_name = self._calibrate_pending()
         if address:
-            start_standalone_calibration(self.hass, address, device_name, head=False)
-            persistent_notification.async_create(
-                self.hass,
-                "Feet calibration **started**. Click **Stop** when fully up, then **Not now** to finish setup.",
-                title="Octo Bed – Feet calibration",
-                notification_id="octo_bed_calibration_action",
+            head_sec = _pending.get(CONF_HEAD_CALIBRATION_SEC, DEFAULT_HEAD_CALIBRATION_SEC)
+            feet_sec = _pending.get(CONF_FEET_CALIBRATION_SEC, DEFAULT_FEET_CALIBRATION_SEC)
+            start_standalone_calibration(
+                self.hass, address, device_name, head=False,
+                head_sec=float(head_sec), feet_sec=float(feet_sec),
             )
         return self.async_show_menu(
             step_id="calibrate",
