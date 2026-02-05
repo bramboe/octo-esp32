@@ -23,16 +23,15 @@
           "device_name": "Remote name",
           "device_address": "MAC address (required)",
           "device_nickname": "Device name (optional)",
-          "pin": "PIN (4 digits)",
-          "pin_confirm": "Confirm PIN (4 digits)"
+          "pin": "PIN (4 digits)"
         }
       },
+      "testing_connection": "Testing connection to bed…",
       "confirm_bluetooth": {
         "title": "Add {name}",
         "description": "Set PIN for this bed. We'll test the connection before adding. MAC: {mac} Optionally give the device a name (e.g. Living room bed).",
         "data": {
           "pin": "PIN (4 digits)",
-          "pin_confirm": "Confirm PIN (4 digits)",
           "device_nickname": "Device name (optional)"
         }
       },
@@ -70,7 +69,6 @@
       "invalid_mac": "MAC must be exactly 12 hex characters (e.g. AA:BB:CC:DD:EE:FF)",
       "mac_required": "Enter the bed's BLE MAC address (12 hex characters) to verify the PIN before adding.",
       "invalid_pin": "Wrong PIN or could not connect. Check the PIN and try again. Use the bed base BLE MAC, not the remote (RC2).",
-      "pin_mismatch": "PIN and Confirm PIN do not match.",
       "no_devices_found": "No Octo Bed remotes found. Ensure remotes are on and in range of your Bluetooth proxy."
     },
     "abort": {
