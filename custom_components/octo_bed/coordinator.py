@@ -204,7 +204,13 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Connect to device (via proxy) and write command. Returns True on success."""
         ble_device = self._get_ble_device()
         if not ble_device:
-            _LOGGER.warning("No BLE device available for Octo Bed (address: %s)", self.device_address)
+            if self.device_address:
+                _LOGGER.warning(
+                    "No BLE device available for Octo Bed (address: %s)",
+                    self.device_address,
+                )
+            else:
+                _LOGGER.debug("Octo Bed: no address configured, skipping BLE command")
             return False
         try:
             async with BleakClient(
