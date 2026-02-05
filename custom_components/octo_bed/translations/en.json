@@ -18,24 +18,22 @@
       },
       "manual": {
         "title": "Octo Bed details",
-        "description": "Enter remote name (e.g. RC2) and optional MAC. Leave MAC empty to discover by name. Optionally give the device a name for the overview.",
+        "description": "Enter remote name (e.g. RC2) and the bed's BLE MAC address. We'll test the connection with your PIN before adding. Optionally give the device a name for the overview.",
         "data": {
           "device_name": "Remote name",
-          "device_address": "MAC address (optional)",
+          "device_address": "MAC address (required)",
           "device_nickname": "Device name (optional)",
-          "head_calibration_seconds": "Head full travel (seconds)",
-          "feet_calibration_seconds": "Feet full travel (seconds)",
-          "pin": "PIN (4 digits)"
+          "pin": "PIN (4 digits)",
+          "pin_confirm": "Confirm PIN (4 digits)"
         }
       },
       "confirm_bluetooth": {
         "title": "Add {name}",
-        "description": "Set PIN for this bed. MAC: {mac} Optionally give the device a name (e.g. Living room bed).",
+        "description": "Set PIN for this bed. We'll test the connection before adding. MAC: {mac} Optionally give the device a name (e.g. Living room bed).",
         "data": {
           "pin": "PIN (4 digits)",
-          "device_nickname": "Device name (optional)",
-          "head_calibration_seconds": "Head full travel (seconds)",
-          "feet_calibration_seconds": "Feet full travel (seconds)"
+          "pin_confirm": "Confirm PIN (4 digits)",
+          "device_nickname": "Device name (optional)"
         }
       },
       "calibrate": {
@@ -70,7 +68,9 @@
     },
     "error": {
       "invalid_mac": "MAC must be exactly 12 hex characters (e.g. AA:BB:CC:DD:EE:FF)",
-      "invalid_pin": "Wrong PIN or could not connect. Check the PIN and try again.",
+      "mac_required": "Enter the bed's BLE MAC address (12 hex characters) to verify the PIN before adding.",
+      "invalid_pin": "Wrong PIN or could not connect. Check the PIN and try again. Use the bed base BLE MAC, not the remote (RC2).",
+      "pin_mismatch": "PIN and Confirm PIN do not match.",
       "no_devices_found": "No Octo Bed remotes found. Ensure remotes are on and in range of your Bluetooth proxy."
     },
     "abort": {
