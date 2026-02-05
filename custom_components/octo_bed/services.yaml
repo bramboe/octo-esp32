@@ -1,0 +1,28 @@
+# Service definitions for Octo Bed (used by UI; services are registered in services.py)
+set_head_position:
+  name: Set head position
+  description: Set the head section position to 0-100%.
+  fields:
+    position:
+      name: Position
+      description: Position in percent (0-100)
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 0.1
+
+set_feet_position:
+  name: Set feet position
+  description: Set the feet section position to 0-100%.
+  fields:
+    position:
+      name: Position
+      description: Position in percent (0-100)
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 0.1
