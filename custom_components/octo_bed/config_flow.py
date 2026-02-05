@@ -86,17 +86,16 @@ def _normalize_calibrate_action(submitted: str) -> str:
 
 
 def _calibrate_schema() -> vol.Schema:
-    """Schema for calibration step: action dropdown. Accept any string so we always receive submission and normalize in code."""
-    options = {
-        "": "— Choose an action —",
-        "head": "▶ Start head calibration",
-        "feet": "▶ Start feet calibration",
-        "stop": "■ Stop calibration",
-        "done": "Done — finish setup",
-    }
+    """Schema for calibration step: action dropdown. Must use vol.In only so voluptuous_serialize can convert it for the frontend."""
     return vol.Schema(
         {
-            vol.Required("action", default=""): vol.Any(vol.In(options), str),
+            vol.Required("action", default=""): vol.In({
+                "": "— Choose an action —",
+                "head": "▶ Start head calibration",
+                "feet": "▶ Start feet calibration",
+                "stop": "■ Stop calibration",
+                "done": "Done — finish setup",
+            }),
         }
     )
 
