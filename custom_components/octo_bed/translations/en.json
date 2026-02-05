@@ -38,6 +38,10 @@
           "feet_calibration_seconds": "Feet full travel (seconds)"
         }
       },
+      "calibrate": {
+        "title": "Calibrate your bed",
+        "description": "The device has been added. Open the device below and use the **Calibrate Head**, **Calibrate Feet**, and **Calibration Stop** buttons to set the full travel time. When finished, click **Submit**."
+      },
       "init": {
         "title": "Calibration",
         "data": {
@@ -54,7 +58,8 @@
       "no_devices_found": "No Octo Bed remotes found. Ensure remotes are on and in range of your Bluetooth proxy."
     },
     "abort": {
-      "already_configured": "This device is already configured."
+      "already_configured": "This device is already configured.",
+      "calibration_complete": "Setup complete. You can calibrate the bed anytime from the device."
     }
   }
 }
