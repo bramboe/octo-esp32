@@ -8,7 +8,7 @@ from datetime import timedelta
 from typing import Any, Callable
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
-from homeassistant.components import bluetooth, persistent_notification
+from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -593,8 +593,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
 # --- Standalone helpers for config flow calibration (no config entry yet) ---
 
-NOTIFICATION_ID_CALIBRATION = "octo_bed_calibration_action"
-
 def _standalone_calibration_tasks(hass: HomeAssistant) -> dict[str, asyncio.Task[None]]:
     """Get or create the dict of address -> calibration task."""
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -721,16 +719,41 @@ def _format_elapsed(seconds: float) -> str:
     return f"{m}:{s:02d}"
 
 
+def _update_calibration_flow_description(
+    hass: HomeAssistant,
+    flow_id: str,
+    status_text: str,
+) -> None:
+    """Update the calibrate step's description_placeholders so progress shows in the dialog."""
+    flow_mgr = getattr(hass.config_entries, "flow", None)
+    if not flow_mgr:
+        return
+    progress = getattr(flow_mgr, "_progress", None)
+    if not progress:
+        return
+    flow = progress.get(flow_id)
+    if not flow or not getattr(flow, "cur_step", None):
+        return
+    step = flow.cur_step
+    if step.get("step_id") != "calibrate":
+        return
+    placeholders = step.get("description_placeholders") or {}
+    if not isinstance(placeholders, dict):
+        return
+    placeholders["status"] = status_text
+    step["description_placeholders"] = placeholders
+    flow.async_notify_flow_changed()
+
+
 async def _standalone_calibration_progress_updater(
     hass: HomeAssistant,
     address: str,
     head: bool,
+    flow_id: str | None,
 ) -> None:
-    """Update the calibration notification every second with elapsed time and progress %."""
+    """Update the calibration dialog's description every second with elapsed time and progress %."""
     key = _normalize_addr(address)
     progress_data = _standalone_calibration_progress(hass)
-    section = "Head" if head else "Feet"
-    title = f"Octo Bed – {section} calibration"
     try:
         while is_standalone_calibration_running(hass, address):
             info = progress_data.get(key)
@@ -744,18 +767,14 @@ async def _standalone_calibration_progress_updater(
             bar_len = 20
             filled = int(progress_pct / 100.0 * bar_len)
             bar = "█" * filled + "░" * (bar_len - filled)
-            message = (
-                f"**Elapsed:** {elapsed_str}  \n"
+            status_text = (
+                f"\n\n**Elapsed:** {elapsed_str}  \n"
                 f"**Progress (estimate):** {progress_pct}%  \n\n"
                 f"{bar}  \n\n"
-                "Click **Stop** when fully up, then **Not now** to finish setup."
+                "Click **Stop** when fully up, then **Not now** to finish."
             )
-            persistent_notification.async_create(
-                hass,
-                message,
-                title=title,
-                notification_id=NOTIFICATION_ID_CALIBRATION,
-            )
+            if flow_id:
+                _update_calibration_flow_description(hass, flow_id, status_text)
             await asyncio.sleep(1.0)
     except asyncio.CancelledError:
         pass
@@ -768,8 +787,9 @@ def start_standalone_calibration(
     head: bool,
     head_sec: float | None = None,
     feet_sec: float | None = None,
+    flow_id: str | None = None,
 ) -> None:
-    """Start head or feet calibration loop (no config entry). Shows elapsed time and progress in notification."""
+    """Start head or feet calibration loop (no config entry). Progress shown in the calibration dialog."""
     addr = address and address.strip()
     if not addr:
         return
@@ -787,18 +807,18 @@ def start_standalone_calibration(
         "head": head,
     }
     section = "Head" if head else "Feet"
-    title = f"Octo Bed – {section} calibration"
-    persistent_notification.async_create(
-        hass,
-        "**Elapsed:** 0:00  \n**Progress (estimate):** 0%  \n\n░░░░░░░░░░░░░░░░░░░░  \n\nClick **Stop** when fully up, then **Not now** to finish setup.",
-        title=title,
-        notification_id=NOTIFICATION_ID_CALIBRATION,
-    )
+    if flow_id:
+        initial_status = (
+            "\n\n**Elapsed:** 0:00  \n**Progress (estimate):** 0%  \n\n"
+            "░░░░░░░░░░░░░░░░░░░░  \n\n"
+            "Click **Stop** when fully up, then **Not now** to finish."
+        )
+        _update_calibration_flow_description(hass, flow_id, initial_status)
     task = hass.async_create_task(
         _standalone_calibration_loop(hass, addr, device_name or "Octo Bed", head)
     )
     tasks[key] = task
-    hass.async_create_task(_standalone_calibration_progress_updater(hass, addr, head))
+    hass.async_create_task(_standalone_calibration_progress_updater(hass, addr, head, flow_id))
 
     def _remove(_: asyncio.Task[None]) -> None:
         tasks.pop(key, None)
