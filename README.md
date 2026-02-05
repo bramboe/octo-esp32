@@ -23,6 +23,8 @@ Control your **Octo Bed** (or compatible BLE bed remote) from Home Assistant usi
 2. Restart Home Assistant
 3. **Settings** → **Devices & Services** → **Add Integration** → search for **Octo Bed**
 
+**If HACS reports "Failed to download zipball" (404):** HACS may be trying to download a specific commit as a branch. Use **Manual** install above, or in HACS open the integration → **⋮** → **Redownload** and ensure the default branch (e.g. `main`) is selected.
+
 ## Configuration
 
 1. **Settings** → **Devices & Services** → **Add Integration** → **Octo Bed**
