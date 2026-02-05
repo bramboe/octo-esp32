@@ -83,6 +83,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_start_time: float = 0.0
         self._calibration_task: asyncio.Task[None] | None = None
         self._calibration_active = False
+        self._calibration_stop_event: asyncio.Event | None = None
 
     @property
     def device_address(self) -> str | None:
@@ -343,59 +344,77 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await client.disconnect()
             self.set_movement_active(False)
 
+    async def async_run_movement_for_duration(
+        self, command: bytes, duration_sec: float
+    ) -> bool:
+        """Run a movement command for a fixed duration over a single BLE connection.
+        Sends command repeatedly at MOVEMENT_COMMAND_INTERVAL_SEC, then STOP. Returns True on success.
+        """
+        if duration_sec <= 0:
+            return True
+        ble_device = self._get_ble_device()
+        if not ble_device:
+            return False
+        self.set_movement_active(True)
+        client = None
+        try:
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                self._device_name or "Octo Bed",
+                disconnected_callback=None,
+                timeout=CONNECT_TIMEOUT,
+            )
+            end_ts = self.hass.loop.time() + duration_sec
+            while self.hass.loop.time() < end_ts:
+                await client.write_gatt_char(
+                    BLE_CHAR_UUID, command, response=False
+                )
+                await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+            await client.write_gatt_char(
+                BLE_CHAR_UUID, CMD_STOP, response=False
+            )
+            return True
+        except Exception as e:
+            _LOGGER.warning("Movement-for-duration BLE error: %s", e)
+            await self._send_command(CMD_STOP)
+            return False
+        finally:
+            if client:
+                await client.disconnect()
+            self.set_movement_active(False)
+
     async def async_set_head_position(self, position: float) -> bool:
-        """Move head to 0-100%% (like cover set_position). Returns True if command accepted."""
+        """Move head to 0-100%% (like cover set_position). Single BLE connection for smooth movement."""
         position = max(0.0, min(100.0, position))
         current = self._head_position
         if abs(position - current) < 0.5:
             return True
-        self.set_movement_active(True)
         diff = abs(position - current)
         duration_ms = int((diff / 100.0) * self._head_calibration_ms)
         duration_ms = max(300, min(self._head_calibration_ms, duration_ms))
-        loop = self.hass.loop
-        end_ts = loop.time() + duration_ms / 1000.0
-        try:
-            if position > current:
-                while loop.time() < end_ts:
-                    await self.async_send_head_up()
-                    await asyncio.sleep(0.3)
-            else:
-                while loop.time() < end_ts:
-                    await self.async_send_head_down()
-                    await asyncio.sleep(0.3)
-        finally:
-            await self.async_send_stop()
-        self.set_head_position(position)
-        self.set_movement_active(False)
-        return True
+        duration_sec = duration_ms / 1000.0
+        command = CMD_HEAD_UP if position > current else CMD_HEAD_DOWN
+        ok = await self.async_run_movement_for_duration(command, duration_sec)
+        if ok:
+            self.set_head_position(position)
+        return ok
 
     async def async_set_feet_position(self, position: float) -> bool:
-        """Move feet to 0-100%% (like cover set_position). Returns True if command accepted."""
+        """Move feet to 0-100%% (like cover set_position). Single BLE connection for smooth movement."""
         position = max(0.0, min(100.0, position))
         current = self._feet_position
         if abs(position - current) < 0.5:
             return True
-        self.set_movement_active(True)
         diff = abs(position - current)
         duration_ms = int((diff / 100.0) * self._feet_calibration_ms)
         duration_ms = max(300, min(self._feet_calibration_ms, duration_ms))
-        loop = self.hass.loop
-        end_ts = loop.time() + duration_ms / 1000.0
-        try:
-            if position > current:
-                while loop.time() < end_ts:
-                    await self.async_send_feet_up()
-                    await asyncio.sleep(0.3)
-            else:
-                while loop.time() < end_ts:
-                    await self.async_send_feet_down()
-                    await asyncio.sleep(0.3)
-        finally:
-            await self.async_send_stop()
-        self.set_feet_position(position)
-        self.set_movement_active(False)
-        return True
+        duration_sec = duration_ms / 1000.0
+        command = CMD_FEET_UP if position > current else CMD_FEET_DOWN
+        ok = await self.async_run_movement_for_duration(command, duration_sec)
+        if ok:
+            self.set_feet_position(position)
+        return ok
 
     async def async_set_light(self, on: bool) -> bool:
         ok = await self._send_command(CMD_LIGHT_ON if on else CMD_LIGHT_OFF)
@@ -442,16 +461,46 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._device_address = None
 
     async def _calibration_loop(self, head: bool) -> None:
-        """Send head up or feet up repeatedly until stopped (for calibration)."""
+        """Send head up or feet up over a single BLE connection until stop event (smooth calibration)."""
+        command = CMD_HEAD_UP if head else CMD_FEET_UP
+        stop_event = self._calibration_stop_event
+        if not stop_event:
+            return
+        ble_device = self._get_ble_device()
+        if not ble_device:
+            return
+        client = None
         try:
-            while self._calibration_task and not self._calibration_task.cancelled():
-                if head:
-                    await self.async_send_head_up()
-                else:
-                    await self.async_send_feet_up()
-                await asyncio.sleep(0.3)
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                self._device_name or "Octo Bed",
+                disconnected_callback=None,
+                timeout=CONNECT_TIMEOUT,
+            )
+            while not stop_event.is_set():
+                await client.write_gatt_char(
+                    BLE_CHAR_UUID, command, response=False
+                )
+                await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+            await client.write_gatt_char(
+                BLE_CHAR_UUID, CMD_STOP, response=False
+            )
         except asyncio.CancelledError:
+            if client:
+                try:
+                    await client.write_gatt_char(
+                        BLE_CHAR_UUID, CMD_STOP, response=False
+                    )
+                except Exception:
+                    pass
             raise
+        except Exception as e:
+            _LOGGER.warning("Calibration loop BLE error: %s", e)
+            await self._send_command(CMD_STOP)
+        finally:
+            if client:
+                await client.disconnect()
 
     async def async_start_calibration_head(self) -> bool:
         """Start head calibration (move head up until user stops). Returns True if started."""
@@ -459,6 +508,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False
         await self.async_send_stop()
         await asyncio.sleep(0.5)
+        self._calibration_stop_event = asyncio.Event()
+        self._calibration_stop_event.clear()
         self._calibration_mode = 1
         self._calibration_active = True
         self._calibration_start_time = self.hass.loop.time()
@@ -473,6 +524,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False
         await self.async_send_stop()
         await asyncio.sleep(0.5)
+        self._calibration_stop_event = asyncio.Event()
+        self._calibration_stop_event.clear()
         self._calibration_mode = 2
         self._calibration_active = True
         self._calibration_start_time = self.hass.loop.time()
@@ -483,12 +536,17 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_stop_calibration(self) -> tuple[bool, float | None, float | None]:
         """Stop calibration, save duration, set position to 100%%, run move_to_zero. Returns (ok, head_sec, feet_sec)."""
+        if self._calibration_stop_event:
+            self._calibration_stop_event.set()
         if self._calibration_task:
-            self._calibration_task.cancel()
             try:
-                await self._calibration_task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(self._calibration_task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                self._calibration_task.cancel()
+                try:
+                    await self._calibration_task
+                except asyncio.CancelledError:
+                    pass
             self._calibration_task = None
         await self.async_send_stop()
         await asyncio.sleep(0.2)
@@ -511,30 +569,24 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return True, head_sec, feet_sec
 
     async def async_move_to_zero(self) -> None:
-        """Move head then feet down to 0%% (like YAML move_to_zero script)."""
+        """Move head then feet down to 0%% (like YAML move_to_zero script). Single BLE connection per section."""
         _LOGGER.info("Moving to zero (flat)")
-        # Head down
         head_start = self._head_position
         if head_start > 0.5:
             duration_ms = int((head_start / 100.0) * self._head_calibration_ms)
             duration_ms = max(300, duration_ms)
-            end_ts = self.hass.loop.time() + duration_ms / 1000.0
-            while self.hass.loop.time() < end_ts:
-                await self.async_send_head_down()
-                await asyncio.sleep(0.3)
-            await self.async_send_stop()
+            await self.async_run_movement_for_duration(
+                CMD_HEAD_DOWN, duration_ms / 1000.0
+            )
         self.set_head_position(0.0)
         await asyncio.sleep(0.5)
-        # Feet down
         feet_start = self._feet_position
         if feet_start > 0.5:
             duration_ms = int((feet_start / 100.0) * self._feet_calibration_ms)
             duration_ms = max(300, duration_ms)
-            end_ts = self.hass.loop.time() + duration_ms / 1000.0
-            while self.hass.loop.time() < end_ts:
-                await self.async_send_feet_down()
-                await asyncio.sleep(0.3)
-            await self.async_send_stop()
+            await self.async_run_movement_for_duration(
+                CMD_FEET_DOWN, duration_ms / 1000.0
+            )
         self.set_feet_position(0.0)
         _LOGGER.info("Move to zero complete")
 
