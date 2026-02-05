@@ -10,7 +10,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components import bluetooth, persistent_notification
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.data_entry_flow import FlowResult, FlowType
 
 from .const import (
     CONF_DEVICE_ADDRESS,
@@ -133,7 +133,15 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if nickname:
                 data[CONF_DEVICE_NICKNAME] = nickname
             title = _entry_title_from_data(data)
-            return self.async_create_entry(title=title, data=data)
+            result = await self.hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": "calibration_setup"},
+            )
+            return self.async_create_entry(
+                title=title,
+                data=data,
+                next_flow=(FlowType.CONFIG_FLOW, result["flow_id"]),
+            )
         self.context["discovered_name"] = name
         self.context["discovered_address"] = address
         if address and not self.unique_id:
@@ -159,7 +167,10 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Handle the initial step: choose scan or manual."""
+        """Handle the initial step: choose scan or manual; or show calibration step (when source is calibration_setup)."""
+        if self.context.get("source") == "calibration_setup":
+            return await self._async_step_calibrate_setup(user_input)
+
         if user_input is not None:
             if user_input.get("next_step") == "scan":
                 return await self.async_step_scan()
@@ -174,6 +185,24 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema)
+
+    async def _async_step_calibrate_setup(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show calibration step after device was added: use device buttons then click Done."""
+        if user_input is not None:
+            return self.async_abort(reason="calibration_complete")
+        return self.async_show_form(
+            step_id="calibrate",
+            data_schema=vol.Schema({vol.Optional("done", default=""): str}),
+            description_placeholders={},
+        )
+
+    async def async_step_calibrate(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle submit from calibration setup step (Done clicked)."""
+        return self.async_abort(reason="calibration_complete")
 
     def _is_octo_bed_candidate(self, info: bluetooth.BluetoothServiceInfo) -> bool:
         """True if this device looks like an Octo Bed remote (FFE0 service or RC2/octo name)."""
@@ -285,7 +314,15 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if nickname:
                 data[CONF_DEVICE_NICKNAME] = nickname
             title = _entry_title_from_data(data)
-            return self.async_create_entry(title=title, data=data)
+            result = await self.hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": "calibration_setup"},
+            )
+            return self.async_create_entry(
+                title=title,
+                data=data,
+                next_flow=(FlowType.CONFIG_FLOW, result["flow_id"]),
+            )
 
         return self.async_show_form(step_id="manual", data_schema=STEP_USER_SCHEMA)
 
