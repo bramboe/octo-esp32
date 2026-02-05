@@ -148,6 +148,15 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="user", data_schema=schema)
 
+    def _is_octo_bed_candidate(self, info: bluetooth.BluetoothServiceInfo) -> bool:
+        """True if this device looks like an Octo Bed remote (FFE0 service or RC2/octo name)."""
+        # service_uuids can be UUID objects or strings; normalize to string for "ffe0" check
+        for u in info.service_uuids or []:
+            if "ffe0" in str(u).lower():
+                return True
+        name = (info.name or "").strip()
+        return bool(name and (name.upper() == "RC2" or "octo" in name.lower()))
+
     async def async_step_scan(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Scan for nearby Octo Bed remotes and let user pick one."""
         if user_input is not None:
@@ -157,25 +166,47 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_confirm_bluetooth(name=name.strip(), address=address.strip())
             return await self.async_step_manual()
 
-        infos = bluetooth.async_discovered_service_info(self.hass, connectable=True)
-        existing = {e.data.get(CONF_DEVICE_ADDRESS, "").upper() for e in self._async_current_entries()}
+        # Include both connectable and non-connectable so we see devices from all adapters (e.g. proxy)
+        infos_conn = bluetooth.async_discovered_service_info(self.hass, connectable=True)
+        infos_any = bluetooth.async_discovered_service_info(self.hass, connectable=False)
+        # Prefer connectable; merge by normalized address so we don't duplicate (address may be with/without colons)
+        by_addr: dict[str, bluetooth.BluetoothServiceInfo] = {}
+        for info in infos_conn:
+            canonical = _normalize_mac(info.address or "")
+            if canonical:
+                by_addr[canonical] = info
+        for info in infos_any:
+            canonical = _normalize_mac(info.address or "")
+            if canonical and canonical not in by_addr:
+                by_addr[canonical] = info
+        infos = list(by_addr.values())
+
+        existing = {_normalize_mac(e.data.get(CONF_DEVICE_ADDRESS, "")) for e in self._async_current_entries()}
         devices = []
-        seen = set()
+        seen: set[str] = set()
         for info in infos:
-            addr = (info.address or "").upper()
-            if not addr or addr in seen or addr in existing:
+            canonical = _normalize_mac(info.address or "")
+            if not canonical or canonical in seen or canonical in existing:
                 continue
-            has_service = any(
-                "ffe0" in (u or "").lower() for u in (info.service_uuids or [])
-            )
+            if not self._is_octo_bed_candidate(info):
+                continue
+            seen.add(canonical)
             name = (info.name or "").strip()
-            if has_service or (name and (name.upper() == "RC2" or "octo" in name.lower())):
-                seen.add(addr)
-                # Label: show MAC first so user can differentiate between beds
-                label = f"{info.address} — {name or 'Octo Bed'}"
-                value = f"{name or info.address}|{info.address}"
-                devices.append((label, value))
+            display_addr = info.address or _format_mac_display(canonical)
+            label = f"{display_addr} — {name or 'Octo Bed'}"
+            value = f"{name or display_addr}|{display_addr}"
+            devices.append((label, value))
+
         if not devices:
+            sample = [
+                (getattr(i, "name", None), getattr(i, "address", None), [str(u) for u in (getattr(i, "service_uuids", None) or [])[:3]])
+                for i in infos[:5]
+            ]
+            _LOGGER.debug(
+                "Octo Bed scan: no candidates in %s discovered device(s). Sample (name, address, uuids): %s",
+                len(infos),
+                sample,
+            )
             schema = vol.Schema(
                 {
                     vol.Required("continue_manual"): vol.In({"manual": "Enter details manually"}),
