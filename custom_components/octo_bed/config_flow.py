@@ -46,17 +46,57 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
+# Map both option value and label to canonical action (frontend may submit either)
+_CALIBRATE_ACTION_MAP = {
+    "": "",
+    "head": "head",
+    "feet": "feet",
+    "stop": "stop",
+    "done": "done",
+    "— choose an action —": "",
+    "▶ start head calibration": "head",
+    "▶ start feet calibration": "feet",
+    "■ stop calibration": "stop",
+    "done — finish setup": "done",
+}
+
+
+def _normalize_calibrate_action(submitted: str) -> str:
+    """Return canonical action 'head'|'feet'|'stop'|'done'|'' from submitted value or label."""
+    s = (submitted or "").strip()
+    if not s:
+        return ""
+    key = s.lower()
+    if key in _CALIBRATE_ACTION_MAP:
+        return _CALIBRATE_ACTION_MAP[key]
+    # Fallback: frontend may send label with different casing/unicode
+    if "head" in key and "calibration" in key:
+        return "head"
+    if "feet" in key and "calibration" in key:
+        return "feet"
+    if "stop" in key and "calibration" in key:
+        return "stop"
+    if "done" in key or "finish" in key:
+        return "done"
+    return ""
+
+
 def _calibrate_schema() -> vol.Schema:
-    """Schema for calibration step: action dropdown (head / feet / stop / done)."""
+    """Schema for calibration step: action dropdown. Include both keys and labels as valid so frontend can submit either."""
+    options = {
+        "": "— Choose an action —",
+        "head": "▶ Start head calibration",
+        "feet": "▶ Start feet calibration",
+        "stop": "■ Stop calibration",
+        "done": "Done — finish setup",
+    }
+    # Some frontends submit the display label instead of the key; allow both so validation never fails
+    valid = dict(options)
+    for label in options.values():
+        valid[label] = label
     return vol.Schema(
         {
-            vol.Required("action", default=""): vol.In({
-                "": "— Choose an action —",
-                "head": "▶ Start head calibration",
-                "feet": "▶ Start feet calibration",
-                "stop": "■ Stop calibration",
-                "done": "Done — finish setup",
-            }),
+            vol.Required("action", default=""): vol.In(valid),
         }
     )
 
@@ -210,7 +250,9 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         device_name = (pending.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
 
         if user_input is not None:
-            action = (user_input.get("action") or "").strip()
+            raw = (user_input.get("action") or "").strip()
+            action = _normalize_calibrate_action(raw)
+            _LOGGER.debug("Calibrate step: raw=%r -> action=%r, address=%s", raw, action, address or "(none)")
             if action == "head" and address:
                 start_standalone_calibration(self.hass, address, device_name, head=True)
                 return self.async_show_form(
