@@ -198,7 +198,8 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self.context["pending_entry_title"] = title
             return self.async_show_form(
                 step_id="calibrate",
-                data_schema=vol.Schema({}),
+                data_schema=_calibrate_schema(),
+                description_placeholders={"status": ""},
             )
         self.context["discovered_name"] = name
         self.context["discovered_address"] = address
@@ -411,7 +412,8 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self.context["pending_entry_title"] = title
             return self.async_show_form(
                 step_id="calibrate",
-                data_schema=vol.Schema({}),
+                data_schema=_calibrate_schema(),
+                description_placeholders={"status": ""},
             )
 
         return self.async_show_form(step_id="manual", data_schema=STEP_USER_SCHEMA)
