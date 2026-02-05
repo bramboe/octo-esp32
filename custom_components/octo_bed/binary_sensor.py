@@ -46,8 +46,8 @@ class OctoBedConnectionBinarySensor(OctoBedEntity, BinarySensorEntity):
         if self.is_on:
             return {}
         if not self.coordinator.device_address:
-            return {"status": "Searching for device"}
-        return {"status": "Disconnected"}
+            return {"status": "searching for device"}
+        return {"status": "disconnected"}
 
     @property
     def available(self) -> bool:
