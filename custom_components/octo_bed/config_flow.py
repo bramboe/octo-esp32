@@ -96,10 +96,12 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         name: str = "",
         address: str = "",
     ) -> FlowResult:
-        """Confirm and complete setup of a discovered device."""
+        """Confirm and complete setup of a discovered device (PIN only; MAC/name come from discovery)."""
         if user_input is not None:
-            name = self.context.get("discovered_name", name)
+            name = self.context.get("discovered_name", name) or "Octo Bed"
             address = (self.context.get("discovered_address", address) or "").strip()
+            if not address and self.unique_id:
+                address = self.unique_id  # set in async_step_bluetooth; survives context
             if not address:
                 return await self.async_step_manual()
             pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
@@ -114,6 +116,8 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_create_entry(title=title, data=data)
         self.context["discovered_name"] = name
         self.context["discovered_address"] = address
+        if address and not self.unique_id:
+            await self.async_set_unique_id(address)  # so address can be recovered if context is lost on submit
         # Show MAC in title so user knows which bed they're configuring
         self.context["title_placeholders"] = {"name": f"{name or 'Octo Bed'} ({address})"}
         schema = vol.Schema(
