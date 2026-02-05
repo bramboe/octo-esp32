@@ -59,7 +59,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=60),
         )
         self._entry = entry
-        self._device_address: str | None = entry.data.get("device_address")
+        _addr = entry.data.get(CONF_DEVICE_ADDRESS)
+        self._device_address: str | None = (_addr and _addr.strip()) or None
         self._device_name = entry.data.get("device_name", "RC2")
         self._pin = entry.data.get("pin", "0000")
         head_sec = entry.options.get("head_calibration_seconds", entry.data.get("head_calibration_seconds", DEFAULT_HEAD_CALIBRATION_SEC))
@@ -82,8 +83,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def device_address(self) -> str | None:
-        """Configured MAC from entry, or discovered address."""
-        return self._entry.data.get("device_address") or self._device_address
+        """Configured MAC from entry, or discovered address. Empty string is treated as None."""
+        addr = self._entry.data.get(CONF_DEVICE_ADDRESS) or self._device_address
+        return addr if (addr and addr.strip()) else None
 
     @property
     def device_name(self) -> str:
@@ -212,12 +214,20 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.debug("No device named %s found; ensure remote is on and in range of Bluetooth Proxy", self._device_name)
 
     def _persist_device_address(self, address: str) -> None:
-        """Save discovered MAC to config entry so it survives reload/restart."""
-        if not address or self._entry.data.get(CONF_DEVICE_ADDRESS) == address:
+        """Save discovered MAC to config entry so it survives reload/restart. Updates title if it was empty."""
+        if not address or not address.strip():
             return
+        address = address.strip()
+        if self._entry.data.get(CONF_DEVICE_ADDRESS) == address:
+            return
+        new_data = {**self._entry.data, CONF_DEVICE_ADDRESS: address}
+        title = self._entry.title or ""
+        if not title or title == "Octo Bed" or "()" in title.replace(" ", ""):
+            title = f"Octo Bed ({address})"
         self.hass.config_entries.async_update_entry(
             self._entry,
-            data={**self._entry.data, CONF_DEVICE_ADDRESS: address},
+            data=new_data,
+            title=title,
         )
 
     def _get_ble_device(self):
@@ -225,9 +235,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         addr = self.device_address
         if not addr:
             return None
-        return bluetooth.async_ble_device_from_address(
+        # Prefer connectable; some proxies expose the device as non-connectable in cache
+        ble_device = bluetooth.async_ble_device_from_address(
             self.hass, addr, connectable=True
         )
+        if ble_device is None:
+            ble_device = bluetooth.async_ble_device_from_address(
+                self.hass, addr, connectable=False
+            )
+        return ble_device
 
     async def _send_command(self, data: bytes) -> bool:
         """Connect to device (via proxy) and write command. Returns True on success."""
