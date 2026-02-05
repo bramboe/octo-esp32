@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.components.light import LightEntity
+from homeassistant.components.light import ColorMode, LightEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -17,6 +17,8 @@ class OctoBedLightEntity(OctoBedEntity, LightEntity):
 
     _attr_name = "Light"
     _attr_unique_id = "light"
+    _attr_supported_color_modes = {ColorMode.ONOFF}
+    _attr_color_mode = ColorMode.ONOFF
 
     @property
     def is_on(self) -> bool | None:
