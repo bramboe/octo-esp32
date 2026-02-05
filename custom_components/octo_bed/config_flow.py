@@ -235,11 +235,12 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             start_standalone_calibration(
                 self.hass, address, device_name, head=True,
                 head_sec=float(head_sec), feet_sec=float(feet_sec),
+                flow_id=self.flow_id,
             )
         return self.async_show_menu(
             step_id="calibrate",
             menu_options=_CALIBRATE_MENU_ACTIVE,
-            description_placeholders={"status": "Head calibration running — pick Stop when fully up, then Not now to finish." if address else "No device address — add MAC in options, or pick Not now."},
+            description_placeholders={"status": "\n\nHead calibration running — progress will appear below." if address else "\n\nNo device address — add MAC in options, or pick Not now."},
         )
 
     async def async_step_calibrate_feet(
@@ -253,11 +254,12 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             start_standalone_calibration(
                 self.hass, address, device_name, head=False,
                 head_sec=float(head_sec), feet_sec=float(feet_sec),
+                flow_id=self.flow_id,
             )
         return self.async_show_menu(
             step_id="calibrate",
             menu_options=_CALIBRATE_MENU_ACTIVE,
-            description_placeholders={"status": "Feet calibration running — pick Stop when fully up, then Not now to finish." if address else "No device address — add MAC in options, or pick Not now."},
+            description_placeholders={"status": "\n\nFeet calibration running — progress will appear below." if address else "\n\nNo device address — add MAC in options, or pick Not now."},
         )
 
     async def async_step_calibrate_stop(
