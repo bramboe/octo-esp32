@@ -664,7 +664,9 @@ async def validate_pin(
     device_name: str,
     pin: str,
 ) -> bool:
-    """Connect, send keep-alive with PIN, then send a bed command. Returns True only if connection and commands succeed (PIN accepted)."""
+    """Connect, send keep-alive with PIN (format matches ESPHome keep_connection_alive), wait, then send CMD_STOP.
+    Returns True only if device stays connected and accepts commands (PIN accepted).
+    Wrong PIN: device typically disconnects us after keep-alive; we wait long enough to detect that."""
     pin = (pin or "0000").strip()[:4].ljust(4, "0")
     addr = address and address.strip()
     if not addr:
@@ -684,6 +686,7 @@ async def validate_pin(
             disconnected_callback=None,
             timeout=CONNECT_TIMEOUT,
         )
+        # Keep-alive format: 0x40 0x20 0x43 0x00 0x04 0x00 + 4 PIN digits (0-9) + 0x40 (same as ESPHome)
         keep_alive = _make_keep_alive(pin)
         write_ok = False
         try:
@@ -698,13 +701,21 @@ async def validate_pin(
         if not write_ok:
             _LOGGER.warning("PIN validation: keep-alive write failed for %s (wrong PIN or not bed base?)", addr)
             return False
-        # Give device time to disconnect us if PIN was wrong (some firmwares take a few seconds)
-        await asyncio.sleep(5.0)
+        # Give device time to disconnect us if PIN was wrong (match ESPHome: device may take several seconds)
+        await asyncio.sleep(8.0)
         if not client.is_connected:
-            _LOGGER.warning("PIN validation: device disconnected after keep-alive (wrong PIN?)")
+            _LOGGER.info("PIN validation: device disconnected after keep-alive (wrong PIN)")
             return False
-        # Send actual bed command to confirm we can control the device
-        await client.write_gatt_char(BLE_CHAR_UUID, CMD_STOP, response=False)
+        # Send bed command; if device rejected PIN it may fail or disconnect now
+        try:
+            await client.write_gatt_char(BLE_CHAR_UUID, CMD_STOP, response=False)
+        except Exception as e:
+            _LOGGER.info("PIN validation: CMD_STOP failed after keep-alive (wrong PIN?): %s", e)
+            return False
+        await asyncio.sleep(1.0)
+        if not client.is_connected:
+            _LOGGER.info("PIN validation: device disconnected after CMD_STOP (wrong PIN)")
+            return False
         return True
     except Exception as e:
         _LOGGER.warning("PIN validation failed for %s: %s", addr, e)
