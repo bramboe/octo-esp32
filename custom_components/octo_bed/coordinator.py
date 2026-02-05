@@ -8,7 +8,7 @@ from datetime import timedelta
 from typing import Any, Callable
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
-from homeassistant.components import bluetooth
+from homeassistant.components import bluetooth, persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -593,12 +593,22 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
 # --- Standalone helpers for config flow calibration (no config entry yet) ---
 
+NOTIFICATION_ID_CALIBRATION = "octo_bed_calibration_action"
+
 def _standalone_calibration_tasks(hass: HomeAssistant) -> dict[str, asyncio.Task[None]]:
     """Get or create the dict of address -> calibration task."""
     domain_data = hass.data.setdefault(DOMAIN, {})
     if "_calibration_tasks" not in domain_data:
         domain_data["_calibration_tasks"] = {}
     return domain_data["_calibration_tasks"]
+
+
+def _standalone_calibration_progress(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
+    """Get or create the dict of address -> {start_time, head_sec, feet_sec, head} for progress display."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if "_calibration_progress" not in domain_data:
+        domain_data["_calibration_progress"] = {}
+    return domain_data["_calibration_progress"]
 
 
 def _normalize_addr(address: str) -> str:
@@ -704,35 +714,104 @@ async def _standalone_calibration_loop(
         tasks.pop(_normalize_addr(addr), None)
 
 
+def _format_elapsed(seconds: float) -> str:
+    """Format seconds as M:SS."""
+    m = int(seconds) // 60
+    s = int(seconds) % 60
+    return f"{m}:{s:02d}"
+
+
+async def _standalone_calibration_progress_updater(
+    hass: HomeAssistant,
+    address: str,
+    head: bool,
+) -> None:
+    """Update the calibration notification every second with elapsed time and progress %."""
+    key = _normalize_addr(address)
+    progress_data = _standalone_calibration_progress(hass)
+    section = "Head" if head else "Feet"
+    title = f"Octo Bed – {section} calibration"
+    try:
+        while is_standalone_calibration_running(hass, address):
+            info = progress_data.get(key)
+            if not info:
+                break
+            start = info["start_time"]
+            cal_sec = info["head_sec"] if head else info["feet_sec"]
+            elapsed = hass.loop.time() - start
+            progress_pct = min(100, int((elapsed / cal_sec) * 100)) if cal_sec and cal_sec > 0 else 0
+            elapsed_str = _format_elapsed(elapsed)
+            bar_len = 20
+            filled = int(progress_pct / 100.0 * bar_len)
+            bar = "█" * filled + "░" * (bar_len - filled)
+            message = (
+                f"**Elapsed:** {elapsed_str}  \n"
+                f"**Progress (estimate):** {progress_pct}%  \n\n"
+                f"{bar}  \n\n"
+                "Click **Stop** when fully up, then **Not now** to finish setup."
+            )
+            persistent_notification.async_create(
+                hass,
+                message,
+                title=title,
+                notification_id=NOTIFICATION_ID_CALIBRATION,
+            )
+            await asyncio.sleep(1.0)
+    except asyncio.CancelledError:
+        pass
+
+
 def start_standalone_calibration(
     hass: HomeAssistant,
     address: str,
     device_name: str,
     head: bool,
+    head_sec: float | None = None,
+    feet_sec: float | None = None,
 ) -> None:
-    """Start head or feet calibration loop (no config entry). Stored by address; one at a time."""
+    """Start head or feet calibration loop (no config entry). Shows elapsed time and progress in notification."""
     addr = address and address.strip()
     if not addr:
         return
     key = _normalize_addr(addr)
     tasks = _standalone_calibration_tasks(hass)
+    progress_data = _standalone_calibration_progress(hass)
     if key in tasks and not tasks[key].done():
         tasks[key].cancel()
+    head_sec = head_sec if head_sec is not None and head_sec > 0 else DEFAULT_HEAD_CALIBRATION_SEC
+    feet_sec = feet_sec if feet_sec is not None and feet_sec > 0 else DEFAULT_FEET_CALIBRATION_SEC
+    progress_data[key] = {
+        "start_time": hass.loop.time(),
+        "head_sec": float(head_sec),
+        "feet_sec": float(feet_sec),
+        "head": head,
+    }
+    section = "Head" if head else "Feet"
+    title = f"Octo Bed – {section} calibration"
+    persistent_notification.async_create(
+        hass,
+        "**Elapsed:** 0:00  \n**Progress (estimate):** 0%  \n\n░░░░░░░░░░░░░░░░░░░░  \n\nClick **Stop** when fully up, then **Not now** to finish setup.",
+        title=title,
+        notification_id=NOTIFICATION_ID_CALIBRATION,
+    )
     task = hass.async_create_task(
         _standalone_calibration_loop(hass, addr, device_name or "Octo Bed", head)
     )
     tasks[key] = task
+    hass.async_create_task(_standalone_calibration_progress_updater(hass, addr, head))
 
     def _remove(_: asyncio.Task[None]) -> None:
         tasks.pop(key, None)
+        progress_data.pop(key, None)
 
     task.add_done_callback(_remove)
-    _LOGGER.info("%s calibration started (standalone); use Stop when done", "Head" if head else "Feet")
+    _LOGGER.info("%s calibration started (standalone); use Stop when done", section)
 
 
 def stop_standalone_calibration(hass: HomeAssistant, address: str) -> bool:
     """Cancel standalone calibration task for this address. Returns True if a task was cancelled."""
     key = _normalize_addr(address)
+    _standalone_calibration_progress(hass).pop(key, None)
     tasks = _standalone_calibration_tasks(hass)
     task = tasks.get(key)
     if not task or task.done():
