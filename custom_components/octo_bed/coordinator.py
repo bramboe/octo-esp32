@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .const import (
     BLE_CHAR_UUID,
     CONF_DEVICE_ADDRESS,
+    CONF_DEVICE_NICKNAME,
     CONNECT_TIMEOUT,
     CMD_BOTH_DOWN,
     CMD_BOTH_UP,
@@ -223,7 +224,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         new_data = {**self._entry.data, CONF_DEVICE_ADDRESS: address}
         title = self._entry.title or ""
-        if not title or title == "Octo Bed" or "()" in title.replace(" ", ""):
+        if self._entry.data.get(CONF_DEVICE_NICKNAME):
+            title = f"Octo Bed ({self._entry.data[CONF_DEVICE_NICKNAME]})"
+        elif not title or title == "Octo Bed" or "()" in title.replace(" ", ""):
             title = f"Octo Bed ({address})"
         self.hass.config_entries.async_update_entry(
             self._entry,
