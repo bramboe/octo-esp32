@@ -4,6 +4,7 @@ DOMAIN = "octo_bed"
 
 CONF_DEVICE_NAME = "device_name"
 CONF_DEVICE_ADDRESS = "device_address"
+CONF_DEVICE_NICKNAME = "device_nickname"
 CONF_PIN = "pin"
 CONF_HEAD_CALIBRATION_SEC = "head_calibration_seconds"
 CONF_FEET_CALIBRATION_SEC = "feet_calibration_seconds"
