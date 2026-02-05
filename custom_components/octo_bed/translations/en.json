@@ -10,7 +10,7 @@
       },
       "scan": {
         "title": "Search for beds",
-        "description": "Select a discovered Octo Bed remote. Found {count} device(s).",
+        "description": "Select a device (MAC shown first to differentiate beds). Found {count} device(s).",
         "data": {
           "picked": "Device",
           "continue_manual": "No devices found"
@@ -29,7 +29,7 @@
       },
       "confirm_bluetooth": {
         "title": "Add {name}",
-        "description": "Configure PIN and calibration for {name} ({address}).",
+        "description": "Configure PIN and calibration. MAC address: {mac}",
         "data": {
           "pin": "PIN (4 digits)",
           "head_calibration_seconds": "Head full travel (seconds)",
