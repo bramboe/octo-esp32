@@ -15,6 +15,7 @@ from homeassistant.data_entry_flow import FlowResult
 from .const import (
     CONF_DEVICE_ADDRESS,
     CONF_DEVICE_NAME,
+    CONF_DEVICE_NICKNAME,
     CONF_FEET_CALIBRATION_SEC,
     CONF_HEAD_CALIBRATION_SEC,
     CONF_PIN,
@@ -31,6 +32,7 @@ STEP_USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_DEVICE_NAME, default=DEFAULT_DEVICE_NAME): str,
         vol.Optional(CONF_DEVICE_ADDRESS, default=""): str,
+        vol.Optional(CONF_DEVICE_NICKNAME, default=""): str,
         vol.Required(CONF_PIN, default=DEFAULT_PIN): str,
     }
 )
@@ -55,6 +57,17 @@ def _format_mac_display(mac: str) -> str:
 def _format_mac_for_options(entry: config_entries.ConfigEntry) -> str:
     """Current MAC from entry for options form (empty string if not set)."""
     return entry.data.get(CONF_DEVICE_ADDRESS) or ""
+
+
+def _entry_title_from_data(data: dict[str, Any]) -> str:
+    """Build device title: Octo Bed (nickname) or Octo Bed (MAC address)."""
+    nickname = (data.get(CONF_DEVICE_NICKNAME) or "").strip()
+    if nickname:
+        return f"Octo Bed ({nickname})"
+    addr = data.get(CONF_DEVICE_ADDRESS) or ""
+    if addr:
+        return f"Octo Bed ({addr})"
+    return f"Octo Bed ({data.get(CONF_DEVICE_NAME, 'Octo Bed')})"
 
 
 class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -105,6 +118,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not address:
                 return await self.async_step_manual()
             pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+            nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
             data = {
                 CONF_DEVICE_NAME: name or address,
                 CONF_DEVICE_ADDRESS: address,
@@ -112,7 +126,9 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
                 CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
             }
-            title = f"Octo Bed ({name or address})"
+            if nickname:
+                data[CONF_DEVICE_NICKNAME] = nickname
+            title = _entry_title_from_data(data)
             return self.async_create_entry(title=title, data=data)
         self.context["discovered_name"] = name
         self.context["discovered_address"] = address
@@ -123,6 +139,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required(CONF_PIN, default=DEFAULT_PIN): str,
+                vol.Optional(CONF_DEVICE_NICKNAME, default=""): str,
             }
         )
         return self.async_show_form(
@@ -248,6 +265,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors={"base": "invalid_mac"},
                 )
 
+            nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
             data = {
                 CONF_DEVICE_NAME: device_name,
                 CONF_PIN: pin,
@@ -256,10 +274,9 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
             if normalized_mac:
                 data[CONF_DEVICE_ADDRESS] = _format_mac_display(normalized_mac)
-
-            title = f"Octo Bed ({device_name})"
-            if normalized_mac:
-                title = f"Octo Bed ({device_name} — {_format_mac_display(normalized_mac)})"
+            if nickname:
+                data[CONF_DEVICE_NICKNAME] = nickname
+            title = _entry_title_from_data(data)
             return self.async_create_entry(title=title, data=data)
 
         return self.async_show_form(step_id="manual", data_schema=STEP_USER_SCHEMA)
@@ -292,6 +309,7 @@ class OctoBedOptionsFlow(config_entries.OptionsFlow):
                     data_schema=self._schema(),
                     errors={"base": "invalid_mac"},
                 )
+            nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
             new_data = {**self._entry.data}
             new_data[CONF_HEAD_CALIBRATION_SEC] = head_sec
             new_data[CONF_FEET_CALIBRATION_SEC] = feet_sec
@@ -300,7 +318,14 @@ class OctoBedOptionsFlow(config_entries.OptionsFlow):
                 new_data[CONF_DEVICE_ADDRESS] = _format_mac_display(normalized_mac)
             elif raw_mac == "":
                 new_data.pop(CONF_DEVICE_ADDRESS, None)
-            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+            if nickname:
+                new_data[CONF_DEVICE_NICKNAME] = nickname
+            else:
+                new_data.pop(CONF_DEVICE_NICKNAME, None)
+            title = _entry_title_from_data(new_data)
+            self.hass.config_entries.async_update_entry(
+                self._entry, data=new_data, title=title
+            )
             return self.async_create_entry(
                 data={
                     CONF_HEAD_CALIBRATION_SEC: head_sec,
@@ -321,10 +346,12 @@ class OctoBedOptionsFlow(config_entries.OptionsFlow):
         )
         mac = _format_mac_for_options(self._entry)
         pin = self._entry.data.get(CONF_PIN, DEFAULT_PIN)
+        nickname = self._entry.data.get(CONF_DEVICE_NICKNAME, "")
         return vol.Schema(
             {
                 vol.Required(CONF_HEAD_CALIBRATION_SEC, default=head): vol.Coerce(float),
                 vol.Required(CONF_FEET_CALIBRATION_SEC, default=feet): vol.Coerce(float),
+                vol.Optional(CONF_DEVICE_NICKNAME, default=nickname): str,
                 vol.Optional(CONF_DEVICE_ADDRESS, default=mac): str,
                 vol.Required(CONF_PIN, default=pin): str,
             }
