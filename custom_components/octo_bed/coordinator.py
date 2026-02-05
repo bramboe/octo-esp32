@@ -739,3 +739,13 @@ def stop_standalone_calibration(hass: HomeAssistant, address: str) -> bool:
         return False
     task.cancel()
     return True
+
+
+def is_standalone_calibration_running(hass: HomeAssistant, address: str) -> bool:
+    """True if head or feet calibration is currently running for this address (config flow)."""
+    key = _normalize_addr(address)
+    if not key:
+        return False
+    tasks = _standalone_calibration_tasks(hass)
+    task = tasks.get(key)
+    return bool(task and not task.done())
