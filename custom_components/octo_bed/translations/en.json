@@ -40,10 +40,20 @@
       },
       "calibrate": {
         "title": "Calibration",
-        "description": "Device added. Choose an action below and click **Submit** to start head or feet calibration, stop movement, or finish setup. Use the **bed’s** BLE MAC (not the remote RC2) when using a Bluetooth proxy. {status}",
-        "data": {
-          "action": "Action"
-        }
+        "description": "Device added. Choose an action below. Use the **bed’s** BLE MAC (not the remote RC2) when using a Bluetooth proxy. {status}",
+        "data": {}
+      },
+      "calibrate_head": {
+        "title": "▶ Start head calibration"
+      },
+      "calibrate_feet": {
+        "title": "▶ Start feet calibration"
+      },
+      "calibrate_stop": {
+        "title": "■ Stop calibration"
+      },
+      "calibrate_done": {
+        "title": "Done — finish setup"
       },
       "init": {
         "title": "Calibration",
