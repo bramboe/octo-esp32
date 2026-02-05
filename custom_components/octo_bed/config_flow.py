@@ -46,8 +46,18 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
-# Calibration menu: use step IDs so clicking an option always calls the right handler
-_CALIBRATE_MENU_OPTIONS = ["calibrate_head", "calibrate_feet", "calibrate_stop", "calibrate_done"]
+# Calibration: form with dropdown so labels are in-schema and always visible
+_CALIBRATE_ACTIONS = {
+    "calibrate_head": "Start head",
+    "calibrate_feet": "Start feet",
+    "calibrate_stop": "Stop",
+    "calibrate_done": "Done",
+}
+CALIBRATE_SCHEMA = vol.Schema(
+    {
+        vol.Required("next_step_id", default="calibrate_done"): vol.In(_CALIBRATE_ACTIONS),
+    }
+)
 
 
 def _normalize_mac(mac: str) -> str:
@@ -145,9 +155,9 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             title = _entry_title_from_data(data)
             self.context["pending_entry_data"] = data
             self.context["pending_entry_title"] = title
-            return self.async_show_menu(
+            return self.async_show_form(
                 step_id="calibrate",
-                menu_options=_CALIBRATE_MENU_OPTIONS,
+                data_schema=CALIBRATE_SCHEMA,
                 description_placeholders={"status": ""},
             )
         self.context["discovered_name"] = name
@@ -201,85 +211,60 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_calibrate(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show calibration menu (step exists so flow can show menu with this step_id)."""
-        return self.async_show_menu(
-            step_id="calibrate",
-            menu_options=_CALIBRATE_MENU_OPTIONS,
-            description_placeholders={"status": ""},
-        )
-
-    async def async_step_calibrate_head(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Start head calibration then show menu again."""
+        """Show calibration form (dropdown with labels in schema so they always display)."""
         _pending, address, device_name = self._calibrate_pending()
-        if address:
-            start_standalone_calibration(self.hass, address, device_name, head=True)
-            persistent_notification.async_create(
-                self.hass,
-                "Head calibration **started**. Click **Stop calibration** when fully up, then **Done** to finish setup.",
-                title="Octo Bed – Head calibration",
-                notification_id="octo_bed_calibration_action",
-            )
-        return self.async_show_menu(
-            step_id="calibrate",
-            menu_options=_CALIBRATE_MENU_OPTIONS,
-            description_placeholders={"status": "Head calibration running — pick Stop when fully up, then Done." if address else "No device address — add MAC in options, or pick Done."},
-        )
+        status = ""
 
-    async def async_step_calibrate_feet(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Start feet calibration then show menu again."""
-        _pending, address, device_name = self._calibrate_pending()
-        if address:
-            start_standalone_calibration(self.hass, address, device_name, head=False)
-            persistent_notification.async_create(
-                self.hass,
-                "Feet calibration **started**. Click **Stop calibration** when fully up, then **Done** to finish setup.",
-                title="Octo Bed – Feet calibration",
-                notification_id="octo_bed_calibration_action",
-            )
-        return self.async_show_menu(
-            step_id="calibrate",
-            menu_options=_CALIBRATE_MENU_OPTIONS,
-            description_placeholders={"status": "Feet calibration running — pick Stop when fully up, then Done." if address else "No device address — add MAC in options, or pick Done."},
-        )
+        if user_input is not None:
+            choice = user_input.get("next_step_id", "calibrate_done")
+            if choice == "calibrate_head":
+                if address:
+                    start_standalone_calibration(self.hass, address, device_name, head=True)
+                    persistent_notification.async_create(
+                        self.hass,
+                        "Head calibration **started**. Click **Stop** when fully up, then **Done** to finish setup.",
+                        title="Octo Bed – Head calibration",
+                        notification_id="octo_bed_calibration_action",
+                    )
+                status = "Head calibration running — pick Stop when fully up, then Done." if address else "No device address — add MAC in options, or pick Done."
+            elif choice == "calibrate_feet":
+                if address:
+                    start_standalone_calibration(self.hass, address, device_name, head=False)
+                    persistent_notification.async_create(
+                        self.hass,
+                        "Feet calibration **started**. Click **Stop** when fully up, then **Done** to finish setup.",
+                        title="Octo Bed – Feet calibration",
+                        notification_id="octo_bed_calibration_action",
+                    )
+                status = "Feet calibration running — pick Stop when fully up, then Done." if address else "No device address — add MAC in options, or pick Done."
+            elif choice == "calibrate_stop":
+                if address:
+                    stop_standalone_calibration(self.hass, address)
+                    await send_single_command(self.hass, address, device_name, CMD_STOP)
+                    persistent_notification.async_create(
+                        self.hass,
+                        "Calibration **stopped**.",
+                        title="Octo Bed",
+                        notification_id="octo_bed_calibration_action",
+                    )
+                status = "Stopped." if address else ""
+            else:
+                # calibrate_done
+                persistent_notification.async_dismiss(self.hass, "octo_bed_calibration_action")
+                if address:
+                    stop_standalone_calibration(self.hass, address)
+                    await send_single_command(self.hass, address, device_name, CMD_STOP)
+                data = self.context.get("pending_entry_data")
+                title = self.context.get("pending_entry_title", "Octo Bed")
+                if data and title:
+                    return self.async_create_entry(title=title, data=data)
+                return self.async_abort(reason="calibration_complete")
 
-    async def async_step_calibrate_stop(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Stop calibration then show menu again."""
-        _pending, address, device_name = self._calibrate_pending()
-        if address:
-            stop_standalone_calibration(self.hass, address)
-            await send_single_command(self.hass, address, device_name, CMD_STOP)
-            persistent_notification.async_create(
-                self.hass,
-                "Calibration **stopped**.",
-                title="Octo Bed",
-                notification_id="octo_bed_calibration_action",
-            )
-        return self.async_show_menu(
+        return self.async_show_form(
             step_id="calibrate",
-            menu_options=_CALIBRATE_MENU_OPTIONS,
-            description_placeholders={"status": "Stopped." if address else ""},
+            data_schema=CALIBRATE_SCHEMA,
+            description_placeholders={"status": status},
         )
-
-    async def async_step_calibrate_done(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Finish setup and create the config entry."""
-        persistent_notification.async_dismiss(self.hass, "octo_bed_calibration_action")
-        _pending, address, device_name = self._calibrate_pending()
-        if address:
-            stop_standalone_calibration(self.hass, address)
-            await send_single_command(self.hass, address, device_name, CMD_STOP)
-        data = self.context.get("pending_entry_data")
-        title = self.context.get("pending_entry_title", "Octo Bed")
-        if data and title:
-            return self.async_create_entry(title=title, data=data)
-        return self.async_abort(reason="calibration_complete")
 
     def _is_octo_bed_candidate(self, info: bluetooth.BluetoothServiceInfo) -> bool:
         """True if this device looks like an Octo Bed remote (FFE0 service or RC2/octo name)."""
@@ -393,9 +378,9 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             title = _entry_title_from_data(data)
             self.context["pending_entry_data"] = data
             self.context["pending_entry_title"] = title
-            return self.async_show_menu(
+            return self.async_show_form(
                 step_id="calibrate",
-                menu_options=_CALIBRATE_MENU_OPTIONS,
+                data_schema=CALIBRATE_SCHEMA,
                 description_placeholders={"status": ""},
             )
 
