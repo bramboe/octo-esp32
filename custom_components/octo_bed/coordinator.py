@@ -622,7 +622,7 @@ async def validate_pin(
     device_name: str,
     pin: str,
 ) -> bool:
-    """Connect, send keep-alive with PIN, then verify device still accepts commands. Returns True only if PIN is accepted."""
+    """Connect, send keep-alive with PIN, then send a bed command. Returns True only if connection and commands succeed (PIN accepted)."""
     pin = (pin or "0000").strip()[:4].ljust(4, "0")
     addr = address and address.strip()
     if not addr:
@@ -643,12 +643,25 @@ async def validate_pin(
             timeout=CONNECT_TIMEOUT,
         )
         keep_alive = _make_keep_alive(pin)
+        write_ok = False
         try:
             await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
+            write_ok = True
         except Exception:
-            await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+            try:
+                await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+                write_ok = True
+            except Exception:
+                pass
+        if not write_ok:
+            _LOGGER.warning("PIN validation: keep-alive write failed for %s (wrong PIN or not bed base?)", addr)
+            return False
         # Give device time to disconnect us if PIN was wrong
         await asyncio.sleep(2.0)
+        if not client.is_connected:
+            _LOGGER.warning("PIN validation: device disconnected after keep-alive (wrong PIN?)")
+            return False
+        # Send actual bed command to confirm we can control the device
         await client.write_gatt_char(BLE_CHAR_UUID, CMD_STOP, response=False)
         return True
     except Exception as e:
