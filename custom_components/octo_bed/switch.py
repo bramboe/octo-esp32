@@ -11,7 +11,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import (
+    CMD_BOTH_DOWN,
+    CMD_BOTH_UP,
+    CMD_FEET_DOWN,
+    CMD_FEET_UP,
+    CMD_HEAD_DOWN,
+    CMD_HEAD_UP,
+    DOMAIN,
+)
 from .coordinator import OctoBedCoordinator
 from .entity import OctoBedEntity
 
@@ -19,48 +27,45 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class OctoBedMovementSwitch(OctoBedEntity, SwitchEntity):
-    """Base switch that runs movement while on."""
+    """Base switch that runs movement while on (single BLE connection for smooth movement)."""
 
-    _cmd_up = None
-    _cmd_down = None
-    _position_key = "head"  # "head" or "feet"
     _cal_key = "head"  # "head" or "feet"
+    _direction_up = True
     _task: asyncio.Task | None = None
+    _stop_event: asyncio.Event | None = None
 
-    async def _run_loop(self, direction_up: bool) -> None:
-        coordinator = self.coordinator
-        coordinator.set_movement_active(True)
-        try:
-            while self._task and not self._task.cancelled():
-                if direction_up:
-                    await (coordinator.async_send_head_up() if self._cal_key == "head" else coordinator.async_send_feet_up())
-                else:
-                    await (coordinator.async_send_head_down() if self._cal_key == "head" else coordinator.async_send_feet_down())
-                await asyncio.sleep(0.3)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await coordinator.async_send_stop()
-            coordinator.set_movement_active(False)
-            self.async_write_ha_state()
+    def _get_command(self) -> bytes:
+        if self._cal_key == "head":
+            return CMD_HEAD_UP if self._direction_up else CMD_HEAD_DOWN
+        return CMD_FEET_UP if self._direction_up else CMD_FEET_DOWN
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         if self._task and not self._task.done():
             return
-        # Subclasses set _direction_up so we know which way to move
-        self._task = asyncio.create_task(self._run_loop(direction_up=getattr(self, "_direction_up", True)))
+        if self._stop_event is None:
+            self._stop_event = asyncio.Event()
+        self._stop_event.clear()
+        self._task = asyncio.create_task(
+            self.coordinator.async_run_movement_loop(
+                self._get_command(),
+                self._stop_event.is_set,
+            )
+        )
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        if self._stop_event:
+            self._stop_event.set()
         if self._task:
-            self._task.cancel()
             try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(self._task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
             self._task = None
-        await self.coordinator.async_send_stop()
-        self.coordinator.set_movement_active(False)
         self.async_write_ha_state()
 
     @property
@@ -102,37 +107,35 @@ class OctoBedBothUpSwitch(OctoBedEntity, SwitchEntity):
     _attr_name = "Both Up"
     _attr_unique_id = "both_up"
     _task: asyncio.Task | None = None
-
-    async def _run_loop(self) -> None:
-        coordinator = self.coordinator
-        coordinator.set_movement_active(True)
-        try:
-            while self._task and not self._task.cancelled():
-                await coordinator.async_send_both_up()
-                await asyncio.sleep(0.3)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await coordinator.async_send_stop()
-            coordinator.set_movement_active(False)
-            self.async_write_ha_state()
+    _stop_event: asyncio.Event | None = None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         if self._task and not self._task.done():
             return
-        self._task = asyncio.create_task(self._run_loop())
+        if self._stop_event is None:
+            self._stop_event = asyncio.Event()
+        self._stop_event.clear()
+        self._task = asyncio.create_task(
+            self.coordinator.async_run_movement_loop(
+                CMD_BOTH_UP,
+                self._stop_event.is_set,
+            )
+        )
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        if self._stop_event:
+            self._stop_event.set()
         if self._task:
-            self._task.cancel()
             try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(self._task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
             self._task = None
-        await self.coordinator.async_send_stop()
-        self.coordinator.set_movement_active(False)
         self.async_write_ha_state()
 
     @property
@@ -146,37 +149,35 @@ class OctoBedBothDownSwitch(OctoBedEntity, SwitchEntity):
     _attr_name = "Both Down"
     _attr_unique_id = "both_down"
     _task: asyncio.Task | None = None
-
-    async def _run_loop(self) -> None:
-        coordinator = self.coordinator
-        coordinator.set_movement_active(True)
-        try:
-            while self._task and not self._task.cancelled():
-                await coordinator.async_send_both_down()
-                await asyncio.sleep(0.3)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await coordinator.async_send_stop()
-            coordinator.set_movement_active(False)
-            self.async_write_ha_state()
+    _stop_event: asyncio.Event | None = None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         if self._task and not self._task.done():
             return
-        self._task = asyncio.create_task(self._run_loop())
+        if self._stop_event is None:
+            self._stop_event = asyncio.Event()
+        self._stop_event.clear()
+        self._task = asyncio.create_task(
+            self.coordinator.async_run_movement_loop(
+                CMD_BOTH_DOWN,
+                self._stop_event.is_set,
+            )
+        )
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        if self._stop_event:
+            self._stop_event.set()
         if self._task:
-            self._task.cancel()
             try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(self._task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
             self._task = None
-        await self.coordinator.async_send_stop()
-        self.coordinator.set_movement_active(False)
         self.async_write_ha_state()
 
     @property
