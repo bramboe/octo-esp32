@@ -46,16 +46,16 @@
         }
       },
       "calibrate_head": {
-        "title": "Start head"
+        "title": "Start calibrating head"
       },
       "calibrate_feet": {
-        "title": "Start feet"
+        "title": "Start calibrating feet"
       },
       "calibrate_stop": {
         "title": "Stop"
       },
       "calibrate_done": {
-        "title": "Done"
+        "title": "Not now"
       },
       "init": {
         "title": "Calibration",
