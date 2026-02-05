@@ -46,9 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if hass.is_running:
         coordinator.start_keep_alive_loop()
     else:
-        entry.async_on_unload(
-            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _start_keep_alive)
-        )
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _start_keep_alive)
     entry.async_on_unload(coordinator.cancel_keep_alive_loop)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
