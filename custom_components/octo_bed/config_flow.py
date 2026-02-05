@@ -32,9 +32,10 @@ _LOGGER = logging.getLogger(__name__)
 STEP_USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_DEVICE_NAME, default=DEFAULT_DEVICE_NAME): str,
-        vol.Optional(CONF_DEVICE_ADDRESS, default=""): str,
+        vol.Required(CONF_DEVICE_ADDRESS, default=""): str,
         vol.Optional(CONF_DEVICE_NICKNAME, default=""): str,
         vol.Required(CONF_PIN, default=DEFAULT_PIN): str,
+        vol.Required("pin_confirm", default=""): str,
     }
 )
 
@@ -119,12 +120,29 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not address:
                 return await self.async_step_manual()
             pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+            pin_confirm = (user_input.get("pin_confirm") or "").strip()[:4].ljust(4, "0")
             nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
+            if pin != pin_confirm:
+                return self.async_show_form(
+                    step_id="confirm_bluetooth",
+                    data_schema=vol.Schema({
+                        vol.Required(CONF_PIN, default=pin): str,
+                        vol.Required("pin_confirm", default=pin_confirm): str,
+                        vol.Optional(CONF_DEVICE_NICKNAME, default=nickname): str,
+                    }),
+                    description_placeholders={
+                        "name": name or "Octo Bed",
+                        "address": address,
+                        "mac": address,
+                    },
+                    errors={"base": "pin_mismatch"},
+                )
             if not await validate_pin(self.hass, address, name or "Octo Bed", pin):
                 return self.async_show_form(
                     step_id="confirm_bluetooth",
                     data_schema=vol.Schema({
                         vol.Required(CONF_PIN, default=pin): str,
+                        vol.Required("pin_confirm", default=pin_confirm): str,
                         vol.Optional(CONF_DEVICE_NICKNAME, default=nickname): str,
                     }),
                     description_placeholders={
@@ -154,6 +172,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required(CONF_PIN, default=DEFAULT_PIN): str,
+                vol.Required("pin_confirm", default=""): str,
                 vol.Optional(CONF_DEVICE_NICKNAME, default=""): str,
             }
         )
@@ -271,18 +290,31 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             device_name = (user_input.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
             raw_mac = (user_input.get(CONF_DEVICE_ADDRESS) or "").strip()
             pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+            pin_confirm = (user_input.get("pin_confirm") or "").strip()[:4].ljust(4, "0")
 
             normalized_mac = _normalize_mac(raw_mac)
-            if raw_mac and len(normalized_mac) != 12:
+            if not raw_mac:
+                return self.async_show_form(
+                    step_id="manual",
+                    data_schema=STEP_USER_SCHEMA,
+                    errors={"base": "mac_required"},
+                )
+            if len(normalized_mac) != 12:
                 return self.async_show_form(
                     step_id="manual",
                     data_schema=STEP_USER_SCHEMA,
                     errors={"base": "invalid_mac"},
                 )
+            if pin != pin_confirm:
+                return self.async_show_form(
+                    step_id="manual",
+                    data_schema=STEP_USER_SCHEMA,
+                    errors={"base": "pin_mismatch"},
+                )
 
             nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
-            addr = _format_mac_display(normalized_mac) if normalized_mac else ""
-            if addr and not await validate_pin(self.hass, addr, device_name, pin):
+            addr = _format_mac_display(normalized_mac)
+            if not await validate_pin(self.hass, addr, device_name, pin):
                 return self.async_show_form(
                     step_id="manual",
                     data_schema=STEP_USER_SCHEMA,
