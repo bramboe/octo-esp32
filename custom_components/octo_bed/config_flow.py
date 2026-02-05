@@ -27,6 +27,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import (
+    is_standalone_calibration_running,
     send_single_command,
     start_standalone_calibration,
     stop_standalone_calibration,
@@ -46,12 +47,15 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
-# Calibration: menu (button-like list). Dict as menu_options so frontend gets step_id -> label.
-_CALIBRATE_MENU_OPTIONS = {
-    "calibrate_head": "Start head",
-    "calibrate_feet": "Start feet",
+# Calibration menu: different options when idle vs when head/feet calibration is running.
+_CALIBRATE_MENU_IDLE = {
+    "calibrate_head": "Start calibrating head",
+    "calibrate_feet": "Start calibrating feet",
+    "calibrate_done": "Not now",
+}
+_CALIBRATE_MENU_ACTIVE = {
     "calibrate_stop": "Stop",
-    "calibrate_done": "Done",
+    "calibrate_done": "Not now",
 }
 
 
@@ -152,7 +156,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self.context["pending_entry_title"] = title
             return self.async_show_menu(
                 step_id="calibrate",
-                menu_options=_CALIBRATE_MENU_OPTIONS,
+                menu_options=_CALIBRATE_MENU_IDLE,
                 description_placeholders={"status": ""},
             )
         self.context["discovered_name"] = name
@@ -203,13 +207,20 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         device_name = (pending.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
         return pending, address, device_name
 
+    def _calibrate_menu_options(self) -> dict[str, str]:
+        """Menu options: only Stop + Not now when calibration is running; otherwise Start head, Start feet, Not now."""
+        _pending, address, _ = self._calibrate_pending()
+        if address and is_standalone_calibration_running(self.hass, address):
+            return _CALIBRATE_MENU_ACTIVE
+        return _CALIBRATE_MENU_IDLE
+
     async def async_step_calibrate(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show calibration menu (button-like list items)."""
+        """Show calibration menu (Start head / Start feet / Not now, or Stop / Not now when calibrating)."""
         return self.async_show_menu(
             step_id="calibrate",
-            menu_options=_CALIBRATE_MENU_OPTIONS,
+            menu_options=self._calibrate_menu_options(),
             description_placeholders={"status": ""},
         )
 
@@ -222,14 +233,14 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             start_standalone_calibration(self.hass, address, device_name, head=True)
             persistent_notification.async_create(
                 self.hass,
-                "Head calibration **started**. Click **Stop** when fully up, then **Done** to finish setup.",
+                "Head calibration **started**. Click **Stop** when fully up, then **Not now** to finish setup.",
                 title="Octo Bed – Head calibration",
                 notification_id="octo_bed_calibration_action",
             )
         return self.async_show_menu(
             step_id="calibrate",
-            menu_options=_CALIBRATE_MENU_OPTIONS,
-            description_placeholders={"status": "Head calibration running — pick Stop when fully up, then Done." if address else "No device address — add MAC in options, or pick Done."},
+            menu_options=_CALIBRATE_MENU_ACTIVE,
+            description_placeholders={"status": "Head calibration running — pick Stop when fully up, then Not now to finish." if address else "No device address — add MAC in options, or pick Not now."},
         )
 
     async def async_step_calibrate_feet(
@@ -241,14 +252,14 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             start_standalone_calibration(self.hass, address, device_name, head=False)
             persistent_notification.async_create(
                 self.hass,
-                "Feet calibration **started**. Click **Stop** when fully up, then **Done** to finish setup.",
+                "Feet calibration **started**. Click **Stop** when fully up, then **Not now** to finish setup.",
                 title="Octo Bed – Feet calibration",
                 notification_id="octo_bed_calibration_action",
             )
         return self.async_show_menu(
             step_id="calibrate",
-            menu_options=_CALIBRATE_MENU_OPTIONS,
-            description_placeholders={"status": "Feet calibration running — pick Stop when fully up, then Done." if address else "No device address — add MAC in options, or pick Done."},
+            menu_options=_CALIBRATE_MENU_ACTIVE,
+            description_placeholders={"status": "Feet calibration running — pick Stop when fully up, then Not now to finish." if address else "No device address — add MAC in options, or pick Not now."},
         )
 
     async def async_step_calibrate_stop(
@@ -267,7 +278,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
         return self.async_show_menu(
             step_id="calibrate",
-            menu_options=_CALIBRATE_MENU_OPTIONS,
+            menu_options=_CALIBRATE_MENU_IDLE,
             description_placeholders={"status": "Stopped." if address else ""},
         )
 
@@ -400,7 +411,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self.context["pending_entry_title"] = title
             return self.async_show_menu(
                 step_id="calibrate",
-                menu_options=_CALIBRATE_MENU_OPTIONS,
+                menu_options=_CALIBRATE_MENU_IDLE,
                 description_placeholders={"status": ""},
             )
 
