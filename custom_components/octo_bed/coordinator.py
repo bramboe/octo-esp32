@@ -762,13 +762,16 @@ async def _standalone_calibration_progress_updater(
             start = info["start_time"]
             cal_sec = info["head_sec"] if head else info["feet_sec"]
             elapsed = hass.loop.time() - start
+            elapsed_sec = int(elapsed)
             progress_pct = min(100, int((elapsed / cal_sec) * 100)) if cal_sec and cal_sec > 0 else 0
             elapsed_str = _format_elapsed(elapsed)
+            full_travel_label = "Head full travel" if head else "Feet full travel"
             bar_len = 20
             filled = int(progress_pct / 100.0 * bar_len)
             bar = "█" * filled + "░" * (bar_len - filled)
             status_text = (
-                f"\n\n**Elapsed:** {elapsed_str}  \n"
+                f"\n\n**{full_travel_label}:** {elapsed_sec} s  \n"
+                f"**Elapsed:** {elapsed_str}  \n"
                 f"**Progress (estimate):** {progress_pct}%  \n\n"
                 f"{bar}  \n\n"
                 "Click **Stop** when fully up, then **Not now** to finish."
@@ -808,8 +811,10 @@ def start_standalone_calibration(
     }
     section = "Head" if head else "Feet"
     if flow_id:
+        full_travel_label = "Head full travel" if head else "Feet full travel"
         initial_status = (
-            "\n\n**Elapsed:** 0:00  \n**Progress (estimate):** 0%  \n\n"
+            f"\n\n**{full_travel_label}:** 0 s  \n"
+            "**Elapsed:** 0:00  \n**Progress (estimate):** 0%  \n\n"
             "░░░░░░░░░░░░░░░░░░░░  \n\n"
             "Click **Stop** when fully up, then **Not now** to finish."
         )
