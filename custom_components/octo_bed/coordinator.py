@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .const import (
     BLE_CHAR_UUID,
     CONF_DEVICE_ADDRESS,
+    DOMAIN,
     CONF_DEVICE_NICKNAME,
     CONNECT_TIMEOUT,
     CMD_BOTH_DOWN,
@@ -37,41 +38,6 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-
-async def send_command_to_device(
-    hass: HomeAssistant,
-    address: str,
-    device_name: str,
-    data: bytes,
-) -> bool:
-    """Send a single BLE command to a device by address (e.g. from config flow). Returns True on success."""
-    if not address or not address.strip():
-        return False
-    address = address.strip()
-    ble_device = bluetooth.async_ble_device_from_address(hass, address, connectable=True)
-    if ble_device is None:
-        ble_device = bluetooth.async_ble_device_from_address(hass, address, connectable=False)
-    if not ble_device:
-        _LOGGER.warning("No BLE device for address %s", address)
-        return False
-    client = None
-    try:
-        client = await establish_connection(
-            BleakClientWithServiceCache,
-            ble_device,
-            device_name or "Octo Bed",
-            disconnected_callback=None,
-            timeout=CONNECT_TIMEOUT,
-        )
-        await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
-        return True
-    except Exception as e:
-        _LOGGER.warning("BLE write to %s failed: %s", address, e)
-        return False
-    finally:
-        if client:
-            await client.disconnect()
 
 
 def _make_keep_alive(pin: str) -> bytes:
@@ -571,3 +537,137 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.async_send_stop()
         self.set_feet_position(0.0)
         _LOGGER.info("Move to zero complete")
+
+
+# --- Standalone helpers for config flow calibration (no config entry yet) ---
+
+def _standalone_calibration_tasks(hass: HomeAssistant) -> dict[str, asyncio.Task[None]]:
+    """Get or create the dict of address -> calibration task."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if "_calibration_tasks" not in domain_data:
+        domain_data["_calibration_tasks"] = {}
+    return domain_data["_calibration_tasks"]
+
+
+def _normalize_addr(address: str) -> str:
+    """Normalize address to 12 hex chars uppercase for use as key."""
+    if not address:
+        return ""
+    return "".join(c for c in address.strip() if c in "0123456789AaBbCcDdEeFf").upper()
+
+
+async def send_single_command(
+    hass: HomeAssistant,
+    address: str,
+    device_name: str,
+    data: bytes,
+) -> bool:
+    """Send one BLE command (e.g. CMD_STOP) without a config entry. Returns True on success."""
+    addr = address and address.strip()
+    if not addr:
+        return False
+    ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=True)
+    if ble_device is None:
+        ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=False)
+    if not ble_device:
+        _LOGGER.warning("No BLE device for %s", addr)
+        return False
+    client = None
+    try:
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            ble_device,
+            device_name or "Octo Bed",
+            disconnected_callback=None,
+            timeout=CONNECT_TIMEOUT,
+        )
+        await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
+        return True
+    except Exception as e:
+        _LOGGER.warning("BLE write failed: %s", e)
+        return False
+    finally:
+        if client:
+            await client.disconnect()
+
+
+async def _standalone_calibration_loop(
+    hass: HomeAssistant,
+    address: str,
+    device_name: str,
+    head: bool,
+) -> None:
+    """Run head-up or feet-up in a loop until cancelled. Sends CMD_STOP on cancel."""
+    command = CMD_HEAD_UP if head else CMD_FEET_UP
+    addr = address and address.strip()
+    if not addr:
+        return
+    ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=True)
+    if ble_device is None:
+        ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=False)
+    if not ble_device:
+        _LOGGER.warning("No BLE device for calibration: %s", addr)
+        return
+    client = None
+    try:
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            ble_device,
+            device_name or "Octo Bed",
+            disconnected_callback=None,
+            timeout=CONNECT_TIMEOUT,
+        )
+        while True:
+            await client.write_gatt_char(BLE_CHAR_UUID, command, response=False)
+            await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+    except asyncio.CancelledError:
+        try:
+            if client:
+                await client.write_gatt_char(BLE_CHAR_UUID, CMD_STOP, response=False)
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        _LOGGER.warning("Calibration loop error: %s", e)
+    finally:
+        if client:
+            await client.disconnect()
+        tasks = _standalone_calibration_tasks(hass)
+        tasks.pop(_normalize_addr(addr), None)
+
+
+def start_standalone_calibration(
+    hass: HomeAssistant,
+    address: str,
+    device_name: str,
+    head: bool,
+) -> None:
+    """Start head or feet calibration loop (no config entry). Stored by address; one at a time."""
+    addr = address and address.strip()
+    if not addr:
+        return
+    key = _normalize_addr(addr)
+    tasks = _standalone_calibration_tasks(hass)
+    if key in tasks and not tasks[key].done():
+        tasks[key].cancel()
+    task = hass.async_create_task(
+        _standalone_calibration_loop(hass, addr, device_name or "Octo Bed", head)
+    )
+    tasks[key] = task
+
+    def _remove(_: asyncio.Task[None]) -> None:
+        tasks.pop(key, None)
+
+    task.add_done_callback(_remove)
+    _LOGGER.info("%s calibration started (standalone); use Stop when done", "Head" if head else "Feet")
+
+
+def stop_standalone_calibration(hass: HomeAssistant, address: str) -> bool:
+    """Cancel standalone calibration task for this address. Returns True if a task was cancelled."""
+    key = _normalize_addr(address)
+    tasks = _standalone_calibration_tasks(hass)
+    task = tasks.get(key)
+    if not task or task.done():
+        return False
+    task.cancel()
+    return True
