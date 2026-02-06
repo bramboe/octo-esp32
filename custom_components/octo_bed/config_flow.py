@@ -134,17 +134,6 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._confirm_no_pin_check = False
                 return self.async_show_progress_done(next_step_id="confirm_bluetooth")
             if result == "ok":
-                # Second check: ensure device still accepts PIN
-                pending = self._confirm_pending
-                ok2 = await validate_pin(
-                    self.hass, pending["address"], pending["name"], pending["pin"]
-                )
-                if not ok2:
-                    _LOGGER.info("PIN validation: second check failed (wrong PIN)")
-                    self._confirm_validation_failed = True
-                    self._confirm_no_pin_check = False
-                    return self.async_show_progress_done(next_step_id="confirm_bluetooth")
-            if result == "ok" and ok2:
                 pending = self._confirm_pending
                 data = {
                     CONF_DEVICE_NAME: pending["name"],
@@ -343,16 +332,6 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._manual_validation_failed = True
                 self._manual_no_pin_check = False
                 return self.async_show_progress_done(next_step_id="manual")
-            if result == "ok":
-                pending = self._manual_pending
-                ok2 = await validate_pin(
-                    self.hass, pending["addr"], pending["device_name"], pending["pin"]
-                )
-                if not ok2:
-                    _LOGGER.info("PIN validation: second check failed (wrong PIN)")
-                    self._manual_validation_failed = True
-                    self._manual_no_pin_check = False
-                    return self.async_show_progress_done(next_step_id="manual")
             if result == "ok":
                 pending = self._manual_pending
                 data = {
