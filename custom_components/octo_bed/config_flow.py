@@ -331,19 +331,29 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     progress_task=task,
                 )
             try:
-                ok = task.result()
+                result = task.result()
             except Exception:
-                ok = False
+                result = "wrong_pin"
             del self._manual_validate_task
-            if ok:
+            if result == "no_pin_check":
+                self._manual_validation_failed = True
+                self._manual_no_pin_check = True
+                return self.async_show_progress_done(next_step_id="manual")
+            if result == "wrong_pin":
+                self._manual_validation_failed = True
+                self._manual_no_pin_check = False
+                return self.async_show_progress_done(next_step_id="manual")
+            if result == "ok":
                 pending = self._manual_pending
                 ok2 = await validate_pin(
                     self.hass, pending["addr"], pending["device_name"], pending["pin"]
                 )
                 if not ok2:
                     _LOGGER.info("PIN validation: second check failed (wrong PIN)")
-                    ok = False
-            if ok:
+                    self._manual_validation_failed = True
+                    self._manual_no_pin_check = False
+                    return self.async_show_progress_done(next_step_id="manual")
+            if result == "ok":
                 pending = self._manual_pending
                 data = {
                     CONF_DEVICE_NAME: pending["device_name"],
@@ -361,6 +371,9 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if getattr(self, "_manual_validation_failed", False):
             self._manual_validation_failed = False
+            no_pin_check = getattr(self, "_manual_no_pin_check", False)
+            if hasattr(self, "_manual_no_pin_check"):
+                delattr(self, "_manual_no_pin_check")
             pending = getattr(self, "_manual_pending", {})
             schema = vol.Schema(
                 {
@@ -373,7 +386,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_form(
                 step_id="manual",
                 data_schema=schema,
-                errors={"base": "invalid_pin"},
+                errors={"base": "no_pin_check" if no_pin_check else "invalid_pin"},
             )
 
         if user_input is not None:
@@ -399,7 +412,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             addr = _format_mac_display(normalized_mac)
             self._manual_pending = {"device_name": device_name, "addr": addr, "pin": pin, "nickname": nickname}
             self._manual_validate_task = self.hass.async_create_task(
-                validate_pin(self.hass, addr, device_name, pin),
+                validate_pin_with_probe(self.hass, addr, device_name, pin),
             )
             return self.async_show_progress(
                 progress_action="testing_connection",
