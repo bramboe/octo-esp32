@@ -26,7 +26,7 @@
           "pin": "PIN (4 digits)"
         }
       },
-      "testing_connection": "Testing connection to bed…",
+      "testing_connection": "Testing connection and sending command…",
       "confirm_bluetooth": {
         "title": "Set PIN for bed",
         "description": "Set PIN for this bed. We'll test the connection before adding. MAC: {mac} Optionally give the device a name (e.g. Living room bed).",
