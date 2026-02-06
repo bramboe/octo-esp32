@@ -658,6 +658,71 @@ def _normalize_addr(address: str) -> str:
     return "".join(c for c in address.strip() if c in "0123456789AaBbCcDdEeFf").upper()
 
 
+# Wrong PIN used to probe whether the device disconnects on invalid PIN (e.g. bed base does, RC2 remote may not)
+_PROBE_WRONG_PIN = "9999"
+
+
+async def probe_device_validates_pin(
+    hass: HomeAssistant,
+    address: str,
+    device_name: str,
+) -> bool:
+    """Send keep-alive with a wrong PIN. Return True if device disconnects (it validates PIN), False if it stays connected (cannot verify PIN on this device)."""
+    addr = address and address.strip()
+    if not addr:
+        return False
+    ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=True)
+    if ble_device is None:
+        ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=False)
+    if not ble_device:
+        return False
+    client = None
+    try:
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            ble_device,
+            device_name or "Octo Bed",
+            disconnected_callback=None,
+            timeout=CONNECT_TIMEOUT,
+        )
+        keep_alive = _make_keep_alive(_PROBE_WRONG_PIN)
+        try:
+            await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
+        except Exception:
+            try:
+                await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+            except Exception:
+                return False
+        await asyncio.sleep(8.0)
+        # If still connected after wrong PIN, this device does not validate PIN at BLE level (e.g. RC2 remote)
+        if client.is_connected:
+            _LOGGER.info("Probe: device stayed connected after wrong PIN (does not support PIN verification)")
+            return False
+        _LOGGER.debug("Probe: device disconnected after wrong PIN (supports PIN verification)")
+        return True
+    except Exception as e:
+        _LOGGER.debug("Probe failed: %s", e)
+        return False
+    finally:
+        if client:
+            await client.disconnect()
+
+
+async def validate_pin_with_probe(
+    hass: HomeAssistant,
+    address: str,
+    device_name: str,
+    pin: str,
+) -> str:
+    """First probe whether device validates PIN; then validate user's PIN.
+    Returns: 'ok' (PIN accepted), 'wrong_pin', or 'no_pin_check' (device does not disconnect on wrong PIN)."""
+    if not await probe_device_validates_pin(hass, address, device_name):
+        return "no_pin_check"
+    if not await validate_pin(hass, address, device_name, pin):
+        return "wrong_pin"
+    return "ok"
+
+
 async def validate_pin(
     hass: HomeAssistant,
     address: str,
