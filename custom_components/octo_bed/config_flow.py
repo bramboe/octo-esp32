@@ -26,7 +26,7 @@ from .const import (
     DEFAULT_PIN,
     DOMAIN,
 )
-from .coordinator import validate_pin
+from .coordinator import validate_pin, validate_pin_with_probe
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -121,20 +121,30 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     progress_task=task,
                 )
             try:
-                ok = task.result()
+                result = task.result()
             except Exception:
-                ok = False
+                result = "wrong_pin"
             del self._confirm_validate_task
-            if ok:
-                # Second check: ensure device still accepts PIN (catches slow disconnect)
+            if result == "no_pin_check":
+                self._confirm_validation_failed = True
+                self._confirm_no_pin_check = True
+                return self.async_show_progress_done(next_step_id="confirm_bluetooth")
+            if result == "wrong_pin":
+                self._confirm_validation_failed = True
+                self._confirm_no_pin_check = False
+                return self.async_show_progress_done(next_step_id="confirm_bluetooth")
+            if result == "ok":
+                # Second check: ensure device still accepts PIN
                 pending = self._confirm_pending
                 ok2 = await validate_pin(
                     self.hass, pending["address"], pending["name"], pending["pin"]
                 )
                 if not ok2:
                     _LOGGER.info("PIN validation: second check failed (wrong PIN)")
-                    ok = False
-            if ok:
+                    self._confirm_validation_failed = True
+                    self._confirm_no_pin_check = False
+                    return self.async_show_progress_done(next_step_id="confirm_bluetooth")
+            if result == "ok" and ok2:
                 pending = self._confirm_pending
                 data = {
                     CONF_DEVICE_NAME: pending["name"],
@@ -152,6 +162,8 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if getattr(self, "_confirm_validation_failed", False):
             self._confirm_validation_failed = False
+            no_pin_check = getattr(self, "_confirm_no_pin_check", False)
+            delattr(self, "_confirm_no_pin_check") if hasattr(self, "_confirm_no_pin_check") else None
             pending = getattr(self, "_confirm_pending", {})
             return self.async_show_form(
                 step_id="confirm_bluetooth",
@@ -164,7 +176,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "address": pending.get("address", ""),
                     "mac": pending.get("address", ""),
                 },
-                errors={"base": "invalid_pin"},
+                errors={"base": "no_pin_check" if no_pin_check else "invalid_pin"},
             )
 
         if user_input is not None:
@@ -178,7 +190,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
             self._confirm_pending = {"name": name or "Octo Bed", "address": address, "pin": pin, "nickname": nickname}
             self._confirm_validate_task = self.hass.async_create_task(
-                validate_pin(self.hass, address, name or "Octo Bed", pin),
+                validate_pin_with_probe(self.hass, address, name or "Octo Bed", pin),
             )
             return self.async_show_progress(
                 progress_action="testing_connection",
