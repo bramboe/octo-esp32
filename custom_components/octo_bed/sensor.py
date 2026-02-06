@@ -14,7 +14,7 @@ from .entity import OctoBedEntity
 
 
 class OctoBedConnectionSensor(OctoBedEntity, SensorEntity):
-    """Sensor for BLE connection status (connected / disconnected / searching for device)."""
+    """Status: connected = authenticated (correct PIN, commands accepted); otherwise disconnected, PIN not accepted, or searching."""
 
     _attr_name = "Connection"
     _attr_unique_id = "connection"
@@ -24,10 +24,13 @@ class OctoBedConnectionSensor(OctoBedEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         data = self.coordinator.data or {}
-        if data.get("connected"):
+        status = data.get("connection_status", "disconnected")
+        if status == "connected":
             return "connected"
-        if not self.coordinator.device_address:
+        if status == "searching":
             return "searching for device"
+        if status == "pin_not_accepted":
+            return "PIN not accepted"
         return "disconnected"
 
     @property
@@ -98,7 +101,7 @@ class OctoBedFeetPositionSensor(OctoBedEntity, SensorEntity):
 
 
 class OctoBedBleStatusSensor(OctoBedEntity, SensorEntity):
-    """Combined BLE status (device name, connection, MAC) like the ESPHome YAML."""
+    """Like ESPHome: shows device name and whether we are authenticated (correct PIN, commands accepted)."""
 
     _attr_name = "BLE status"
     _attr_unique_id = "ble_status"
@@ -108,10 +111,16 @@ class OctoBedBleStatusSensor(OctoBedEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         name = self.coordinator.device_name
-        connected = (
-            self.coordinator.data or {}
-        ).get("connected", False)
-        status = "Connected" if connected else "Disconnected"
+        data = self.coordinator.data or {}
+        conn_status = data.get("connection_status", "disconnected")
+        if conn_status == "connected":
+            status = "Connected"
+        elif conn_status == "pin_not_accepted":
+            status = "PIN not accepted"
+        elif conn_status == "searching":
+            status = "Searching"
+        else:
+            status = "Disconnected"
         value = f"{name} ({status})"
         addr = self.coordinator.device_address
         if addr:
@@ -120,10 +129,12 @@ class OctoBedBleStatusSensor(OctoBedEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, str | bool]:
+        data = self.coordinator.data or {}
         return {
             "device_name": self.coordinator.device_name,
             "mac_address": self.coordinator.device_address or "Not set",
-            "connected": (self.coordinator.data or {}).get("connected", False),
+            "connected": data.get("connected", False),
+            "connection_status": data.get("connection_status", "disconnected"),
         }
 
     @property
