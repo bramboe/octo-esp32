@@ -166,8 +166,18 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _data(self) -> dict[str, Any]:
         addr = self.device_address
-        # Connected = device in range AND PIN accepted (wrong PIN causes device to disconnect us)
-        connected = bool(addr and self._address_present(addr) and self._authenticated)
+        present = bool(addr and self._address_present(addr))
+        # Connected = authenticated: we can send commands because the correct PIN was accepted (like ESPHome).
+        # Not just "BLE MAC in range" – wrong PIN or no auth means disconnected.
+        connected = bool(present and self._authenticated)
+        if not addr:
+            connection_status = "searching"
+        elif not present:
+            connection_status = "disconnected"
+        elif not self._authenticated:
+            connection_status = "pin_not_accepted"
+        else:
+            connection_status = "connected"
         return {
             "head_position": self._head_position,
             "feet_position": self._feet_position,
@@ -176,11 +186,12 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "device_address": addr,
             "available": addr is not None,
             "connected": connected,
+            "connection_status": connection_status,
             "calibration_active": self._calibration_active,
         }
 
     async def _check_pin_accepted(self) -> bool:
-        """Connect, send keep-alive with PIN, wait; return True only if device stays connected (PIN accepted)."""
+        """Establish connection and send keep-alive with PIN. Return True only if device stays connected (PIN accepted, commands will be accepted)."""
         addr = self.device_address
         if not addr or not self._address_present(addr):
             return False
@@ -204,7 +215,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
                 except Exception:
                     return False
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(5.0)
             if not client.is_connected:
                 _LOGGER.debug("Device disconnected after keep-alive (wrong PIN or not bed base)")
                 return False
