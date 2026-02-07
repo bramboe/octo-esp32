@@ -26,9 +26,24 @@ from .const import (
     DEFAULT_PIN,
     DOMAIN,
 )
-from .coordinator import validate_pin, validate_pin_with_probe
+from .coordinator import validate_pin_with_probe
 
 _LOGGER = logging.getLogger(__name__)
+
+# Max time for probe + PIN validation so the flow never hangs (progress task timeout)
+VALIDATION_TIMEOUT_SEC = 75
+
+
+async def _validation_with_timeout(hass: HomeAssistant, address: str, device_name: str, pin: str) -> str:
+    """Run validate_pin_with_probe with a timeout; return 'timeout' on timeout."""
+    try:
+        return await asyncio.wait_for(
+            validate_pin_with_probe(hass, address, device_name, pin),
+            timeout=VALIDATION_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        _LOGGER.warning("PIN validation timed out after %s seconds", VALIDATION_TIMEOUT_SEC)
+        return "timeout"
 
 STEP_USER_SCHEMA = vol.Schema(
     {
@@ -122,9 +137,14 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
             try:
                 result = task.result()
-            except Exception:
+            except Exception as e:
+                _LOGGER.debug("Validation task error: %s", e)
                 result = "wrong_pin"
             del self._confirm_validate_task
+            if result == "timeout":
+                self._confirm_validation_failed = True
+                self._confirm_timeout = True
+                return self.async_show_progress_done(next_step_id="confirm_bluetooth")
             if result == "no_pin_check":
                 self._confirm_validation_failed = True
                 self._confirm_no_pin_check = True
@@ -152,8 +172,17 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if getattr(self, "_confirm_validation_failed", False):
             self._confirm_validation_failed = False
             no_pin_check = getattr(self, "_confirm_no_pin_check", False)
-            delattr(self, "_confirm_no_pin_check") if hasattr(self, "_confirm_no_pin_check") else None
+            timeout = getattr(self, "_confirm_timeout", False)
+            for attr in ("_confirm_no_pin_check", "_confirm_timeout"):
+                if hasattr(self, attr):
+                    delattr(self, attr)
             pending = getattr(self, "_confirm_pending", {})
+            if timeout:
+                err = "connection_timeout"
+            elif no_pin_check:
+                err = "no_pin_check"
+            else:
+                err = "invalid_pin"
             return self.async_show_form(
                 step_id="confirm_bluetooth",
                 data_schema=vol.Schema({
@@ -165,7 +194,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "address": pending.get("address", ""),
                     "mac": pending.get("address", ""),
                 },
-                errors={"base": "no_pin_check" if no_pin_check else "invalid_pin"},
+                errors={"base": err},
             )
 
         if user_input is not None:
@@ -179,7 +208,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
             self._confirm_pending = {"name": name or "Octo Bed", "address": address, "pin": pin, "nickname": nickname}
             self._confirm_validate_task = self.hass.async_create_task(
-                validate_pin_with_probe(self.hass, address, name or "Octo Bed", pin),
+                _validation_with_timeout(self.hass, address, name or "Octo Bed", pin),
             )
             return self.async_show_progress(
                 progress_action="testing_connection",
@@ -321,9 +350,14 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
             try:
                 result = task.result()
-            except Exception:
+            except Exception as e:
+                _LOGGER.debug("Validation task error: %s", e)
                 result = "wrong_pin"
             del self._manual_validate_task
+            if result == "timeout":
+                self._manual_validation_failed = True
+                self._manual_timeout = True
+                return self.async_show_progress_done(next_step_id="manual")
             if result == "no_pin_check":
                 self._manual_validation_failed = True
                 self._manual_no_pin_check = True
@@ -351,9 +385,12 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if getattr(self, "_manual_validation_failed", False):
             self._manual_validation_failed = False
             no_pin_check = getattr(self, "_manual_no_pin_check", False)
-            if hasattr(self, "_manual_no_pin_check"):
-                delattr(self, "_manual_no_pin_check")
+            timeout = getattr(self, "_manual_timeout", False)
+            for attr in ("_manual_no_pin_check", "_manual_timeout"):
+                if hasattr(self, attr):
+                    delattr(self, attr)
             pending = getattr(self, "_manual_pending", {})
+            err = "connection_timeout" if timeout else ("no_pin_check" if no_pin_check else "invalid_pin")
             schema = vol.Schema(
                 {
                     vol.Required(CONF_DEVICE_NAME, default=pending.get("device_name", DEFAULT_DEVICE_NAME)): str,
@@ -365,7 +402,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_form(
                 step_id="manual",
                 data_schema=schema,
-                errors={"base": "no_pin_check" if no_pin_check else "invalid_pin"},
+                errors={"base": err},
             )
 
         if user_input is not None:
@@ -391,7 +428,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             addr = _format_mac_display(normalized_mac)
             self._manual_pending = {"device_name": device_name, "addr": addr, "pin": pin, "nickname": nickname}
             self._manual_validate_task = self.hass.async_create_task(
-                validate_pin_with_probe(self.hass, addr, device_name, pin),
+                _validation_with_timeout(self.hass, addr, device_name, pin),
             )
             return self.async_show_progress(
                 progress_action="testing_connection",
