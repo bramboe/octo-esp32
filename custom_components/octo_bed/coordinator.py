@@ -25,8 +25,8 @@ from .const import (
     CMD_FEET_UP,
     CMD_HEAD_DOWN,
     CMD_HEAD_UP,
-    CMD_LIGHT_OFF,
-    CMD_LIGHT_ON,
+    CMD_LIGHT_OFF_PERMANENT,
+    CMD_LIGHT_ON_PERMANENT,
     CMD_STOP,
     DEFAULT_FEET_CALIBRATION_SEC,
     DEFAULT_HEAD_CALIBRATION_SEC,
@@ -305,7 +305,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return ble_device
 
     async def _send_command(self, data: bytes) -> bool:
-        """Connect to device (via proxy) and write command. Returns True on success."""
+        """Connect to device (via proxy) and write command. Retries once on failure (transient BLE)."""
         ble_device = self._get_ble_device()
         if not ble_device:
             if self.device_address:
@@ -316,23 +316,30 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 _LOGGER.debug("Octo Bed: no address configured, skipping BLE command")
             return False
-        client = None
-        try:
-            client = await establish_connection(
-                BleakClientWithServiceCache,
-                ble_device,
-                self._device_name or "Octo Bed",
-                disconnected_callback=None,
-                timeout=CONNECT_TIMEOUT,
-            )
-            await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
-            return True
-        except Exception as e:
-            _LOGGER.warning("BLE write failed: %s", e)
-            return False
-        finally:
-            if client:
-                await client.disconnect()
+        last_error = None
+        for attempt in range(2):
+            client = None
+            try:
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    self._device_name or "Octo Bed",
+                    disconnected_callback=None,
+                    timeout=CONNECT_TIMEOUT,
+                )
+                await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
+                return True
+            except Exception as e:
+                last_error = e
+                if attempt == 0:
+                    _LOGGER.debug("BLE write failed (will retry once): %s", e)
+                    await asyncio.sleep(1.0)
+                else:
+                    _LOGGER.warning("BLE write failed after retry: %s", e)
+            finally:
+                if client:
+                    await client.disconnect()
+        return False
 
     async def async_send_stop(self) -> bool:
         """Send stop command."""
@@ -470,7 +477,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return ok
 
     async def async_set_light(self, on: bool) -> bool:
-        ok = await self._send_command(CMD_LIGHT_ON if on else CMD_LIGHT_OFF)
+        ok = await self._send_command(CMD_LIGHT_ON_PERMANENT if on else CMD_LIGHT_OFF_PERMANENT)
         if ok:
             self._light_on = on
         return ok
@@ -672,6 +679,38 @@ def _normalize_addr(address: str) -> str:
 # Wrong PIN used to probe whether the device disconnects on invalid PIN (e.g. bed base does, RC2 remote may not)
 _PROBE_WRONG_PIN = "9999"
 
+# How long to wait for device to appear in scanner cache before giving up
+_WAIT_FOR_DEVICE_SEC = 25.0
+_WAIT_FOR_DEVICE_INTERVAL_SEC = 2.0
+
+
+async def _wait_for_ble_device(
+    hass: HomeAssistant,
+    address: str,
+) -> Any:
+    """Wait for the BLE device to appear in the scanner cache (device may advertise intermittently)."""
+    addr = (address or "").strip()
+    if not addr:
+        return None
+    # Try colon format if we have 12 hex chars
+    normalized = _normalize_addr(addr)
+    addresses_to_try = [addr]
+    if len(normalized) == 12:
+        colon = ":".join(normalized[i : i + 2] for i in (0, 2, 4, 6, 8, 10))
+        if colon != addr:
+            addresses_to_try.append(colon)
+    elapsed = 0.0
+    while elapsed < _WAIT_FOR_DEVICE_SEC:
+        for a in addresses_to_try:
+            ble_device = bluetooth.async_ble_device_from_address(hass, a, connectable=True)
+            if ble_device is None:
+                ble_device = bluetooth.async_ble_device_from_address(hass, a, connectable=False)
+            if ble_device:
+                return ble_device
+        await asyncio.sleep(_WAIT_FOR_DEVICE_INTERVAL_SEC)
+        elapsed += _WAIT_FOR_DEVICE_INTERVAL_SEC
+    return None
+
 
 async def probe_device_validates_pin(
     hass: HomeAssistant,
@@ -682,9 +721,7 @@ async def probe_device_validates_pin(
     addr = address and address.strip()
     if not addr:
         return False
-    ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=True)
-    if ble_device is None:
-        ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=False)
+    ble_device = await _wait_for_ble_device(hass, addr)
     if not ble_device:
         return False
     client = None
@@ -704,7 +741,7 @@ async def probe_device_validates_pin(
                 await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
             except Exception:
                 return False
-        await asyncio.sleep(8.0)
+        await asyncio.sleep(5.0)
         # If still connected after wrong PIN, this device does not validate PIN at BLE level (e.g. RC2 remote)
         if client.is_connected:
             _LOGGER.info("Probe: device stayed connected after wrong PIN (does not support PIN verification)")
@@ -725,13 +762,18 @@ async def validate_pin_with_probe(
     device_name: str,
     pin: str,
 ) -> str:
-    """First probe whether device validates PIN; then validate user's PIN.
-    Returns: 'ok' (PIN accepted), 'wrong_pin', or 'no_pin_check' (device does not disconnect on wrong PIN)."""
-    if not await probe_device_validates_pin(hass, address, device_name):
-        return "no_pin_check"
-    if not await validate_pin(hass, address, device_name, pin):
+    """Probe whether device disconnects on wrong PIN; then validate user's PIN.
+    Returns: 'ok' (PIN accepted), 'wrong_pin', or 'no_pin_check' (device does not
+    disconnect on wrong PIN and user PIN did not work - e.g. RC2 remote)."""
+    probe_validates = await probe_device_validates_pin(hass, address, device_name)
+    user_ok = await validate_pin(hass, address, device_name, pin)
+    if user_ok:
+        return "ok"
+    # User PIN failed: if device disconnects on wrong PIN we know it was wrong_pin
+    if probe_validates:
         return "wrong_pin"
-    return "ok"
+    # Device does not disconnect on wrong PIN and user PIN didn't work → likely RC2
+    return "no_pin_check"
 
 
 async def validate_pin(
@@ -747,11 +789,9 @@ async def validate_pin(
     addr = address and address.strip()
     if not addr:
         return False
-    ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=True)
-    if ble_device is None:
-        ble_device = bluetooth.async_ble_device_from_address(hass, addr, connectable=False)
+    ble_device = await _wait_for_ble_device(hass, addr)
     if not ble_device:
-        _LOGGER.warning("PIN validation: no BLE device for %s", addr)
+        _LOGGER.warning("PIN validation: no BLE device for %s (not seen by scanner within %ss)", addr, _WAIT_FOR_DEVICE_SEC)
         return False
     client = None
     try:
@@ -777,8 +817,8 @@ async def validate_pin(
         if not write_ok:
             _LOGGER.warning("PIN validation: keep-alive write failed for %s (wrong PIN or not bed base?)", addr)
             return False
-        # Give device time to disconnect us if PIN was wrong (match ESPHome: device may take several seconds)
-        await asyncio.sleep(8.0)
+        # Give device time to disconnect us if PIN was wrong
+        await asyncio.sleep(5.0)
         if not client.is_connected:
             _LOGGER.info("PIN validation: device disconnected after keep-alive (wrong PIN)")
             return False
