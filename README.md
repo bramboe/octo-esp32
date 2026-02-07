@@ -1,64 +1,56 @@
 # Octo Bed – Home Assistant integration
 
-Control your **Octo Bed** (or compatible BLE bed remote) from Home Assistant using an **existing ESP32 Bluetooth Proxy** (or any HA Bluetooth adapter). No need to run a dedicated ESPHome device for the bed; this integration uses the same BLE protocol and works with your current Bluetooth Proxy.
+Control your **Octo Bed** (or compatible BLE bed) from Home Assistant using an **ESP32 Bluetooth Proxy** (or any HA Bluetooth adapter). Same BLE protocol as the official app; no dedicated ESPHome device required.
 
 ## Requirements
 
-- Home Assistant with **Bluetooth** support (native or via [ESP32 Bluetooth Proxy](https://esphome.io/components/bluetooth_proxy.html))
-- The bed’s BLE remote powered on and in range of the proxy (advertises as **RC2** by default)
+- Home Assistant with **Bluetooth** (native or [ESP32 Bluetooth Proxy](https://esphome.io/components/bluetooth_proxy.html))
+- Bed base powered on and **in range of the proxy** (advertises as **RC2** by default)
+- Your bed’s **4-digit PIN** (used to authenticate; tested during setup)
 
 ## Installation
 
 ### Via HACS (recommended)
 
-1. In HACS go to **Integrations** → **⋮** → **Custom repositories**
-2. Add: `https://github.com/bramboe/octo-esp32`
-3. Choose category **Integration**
-4. Install **Octo Bed**
-5. Restart Home Assistant
+1. **HACS** → **Integrations** → **⋮** → **Custom repositories** → add `https://github.com/bramboe/octo-esp32`
+2. Category **Integration** → install **Octo Bed** → restart Home Assistant
 
 ### Manual
 
-1. Copy the `custom_components/octo_bed` folder into your HA `custom_components` directory
-2. Restart Home Assistant
-3. **Settings** → **Devices & Services** → **Add Integration** → search for **Octo Bed**
+1. Copy `custom_components/octo_bed` into your HA `custom_components` folder
+2. Restart Home Assistant → **Settings** → **Devices & Services** → **Add Integration** → **Octo Bed**
 
-**If HACS reports "Failed to download zipball" (404):** HACS may be trying to download a specific commit as a branch. Use **Manual** install above, or in HACS open the integration → **⋮** → **Redownload** and ensure the default branch (e.g. `main`) is selected.
+**HACS 404:** Use Manual install, or Redownload and select the default branch (e.g. `main`).
 
 ## Configuration
 
-1. **Settings** → **Devices & Services** → **Add Integration** → **Octo Bed**
-2. Enter:
-   - **Device name**: BLE name of the remote (default: `RC2`)
-   - **Device address (optional)**: MAC address if you want to lock to a specific remote (e.g. `AA:BB:CC:DD:EE:FF`)
-   - **PIN**: 4-digit PIN used for keep-alive (default: `0000`)
-   - **Head calibration (seconds)**: Time in seconds for head to move 0%→100% (default: 30)
-   - **Feet calibration (seconds)**: Time in seconds for feet to move 0%→100% (default: 30)
-3. If you leave **Device address** empty, the integration will discover the remote by name when it is in range.
+1. **Add Integration** → **Octo Bed** → choose **Search for beds** or **Enter details manually**.
+2. **Search:** Pick the bed from the list (MAC shown to tell beds apart), then **Set PIN for bed** and enter your 4-digit PIN. The integration tests the connection before adding.
+3. **Manual:** Enter the bed’s **BLE MAC address** (required), remote name (e.g. `RC2`), and **PIN**. Connection is tested before adding.
+4. **Two beds:** Add the integration twice (or scan twice). Use each bed’s **MAC address** so each config is bound to the correct bed.
+
+**Connection = authenticated:** The integration only treats the bed as “connected” when the correct PIN is accepted and commands work (not just “device in range”). If you see “PIN not accepted”, check the PIN and that you use the **bed base** MAC, not the remote’s.
 
 After setup you get:
 
-- **Covers**: Head, Feet, Both (position 0–100%, open/close/stop)
-- **Light**: Bed light on/off
-- **Switches**: Head Up, Head Down, Feet Up, Feet Down (hold to move, turn off to stop)
-- **Buttons**: Stop All, Search for Device, Send Keep-Alive
+- **Covers**: Head, Feet, Both (0–100%, open/close/stop)
+- **Light**: Bed light on/off (permanent duration, like the official app)
+- **Switches**: Head Up/Down, Feet Up/Down (hold to move, turn off to stop)
+- **Buttons**: Stop All, Calibrate Head/Feet, Calibration Stop, Reset BLE Connection
+- **Sensors**: Connection status, MAC address, head/feet position
 
 ## Options
 
-From the integration’s **Configure** you can change:
+From the device’s **Configure** you can change:
 
-- Head calibration (seconds)
-- Feet calibration (seconds)
+- Head / feet calibration (seconds)
+- Device nickname, MAC address, PIN
 
 ## Notes
 
-- Position (head/feet 0–100%) is **estimated** from movement time; the remote does not report position. Run calibration (or set the durations in options) to match your bed.
-- For best range and reliability, use an **ESP32 Bluetooth Proxy** close to the bed.
-- If the remote is not found, use the **Search for Device** button and ensure the remote is on and near the proxy.
-
-## Protocol
-
-The integration talks to the bed remote over BLE (service `FFE0`, characteristic `FFE1`), using the same command set as the [Octo Bed ESPHome configuration](https://github.com/bramboe/octo-esp32). It is compatible with remotes that advertise as **RC2** (or the name you configure).
+- **Position** (head/feet 0–100%) is estimated from movement time; the remote does not report position. Use **Calibrate Head/Feet** (or set durations in options) to match your bed.
+- **Range:** Place the Bluetooth proxy close to the bed. If the device is not found, use **Reset BLE Connection** and ensure the bed is on and in range.
+- **Protocol:** BLE service `FFE0`, characteristic `FFE1`; same command set as the official app and the [Octo Bed ESPHome config](https://github.com/bramboe/octo-esp32).
 
 ## License
 
