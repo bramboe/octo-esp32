@@ -34,6 +34,9 @@ from .const import (
     KEEP_ALIVE_PREFIX,
     KEEP_ALIVE_SUFFIX,
     MOVEMENT_COMMAND_INTERVAL_SEC,
+    PIN_RESPONSE_ACCEPTED,
+    PIN_RESPONSE_REJECTED,
+    PIN_RESPONSE_STATUS_BYTE_INDEX,
     WRITE_TIMEOUT,
 )
 
@@ -48,6 +51,20 @@ def _make_keep_alive(pin: str) -> bytes:
     pin = pin[:4]
     digits = bytes([ord(c) - ord("0") for c in pin])
     return KEEP_ALIVE_PREFIX + digits + KEEP_ALIVE_SUFFIX
+
+
+def _parse_pin_response(data: bytes) -> bool | None:
+    """Parse bed notification after keep-alive. True = PIN accepted (0x1A), False = rejected (0x18), None = unknown."""
+    if not data or len(data) <= PIN_RESPONSE_STATUS_BYTE_INDEX:
+        return None
+    if data[0] != 0x40 or data[1] != 0x21:
+        return None
+    status = data[PIN_RESPONSE_STATUS_BYTE_INDEX]
+    if status == PIN_RESPONSE_ACCEPTED:
+        return True
+    if status == PIN_RESPONSE_REJECTED:
+        return False
+    return None
 
 
 class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -191,7 +208,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     async def _check_pin_accepted(self) -> bool:
-        """Establish connection and send keep-alive with PIN. Return True only if device stays connected (PIN accepted, commands will be accepted)."""
+        """Establish connection, send keep-alive with PIN. Use bed notification (0x1A=accepted, 0x18=rejected) when present, else fall back to disconnect behaviour."""
         addr = self.device_address
         if not addr or not self._address_present(addr):
             return False
@@ -208,13 +225,43 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=CONNECT_TIMEOUT,
             )
             keep_alive = _make_keep_alive(self.pin)
+            received: list[bytes] = []
+            notif_event = asyncio.Event()
+
+            def _on_notification(_char_handle: int, data: bytearray) -> None:
+                received.append(bytes(data))
+                notif_event.set()
+
             try:
-                await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
-            except Exception:
+                await client.start_notify(BLE_CHAR_UUID, _on_notification)
+            except Exception as e:
+                _LOGGER.debug("Could not start notifications for PIN response: %s", e)
+            try:
                 try:
-                    await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+                    await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
                 except Exception:
-                    return False
+                    try:
+                        await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+                    except Exception:
+                        return False
+                try:
+                    await asyncio.wait_for(notif_event.wait(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    pass
+                if received:
+                    parsed = _parse_pin_response(received[-1])
+                    if parsed is True:
+                        return True
+                    if parsed is False:
+                        _LOGGER.debug("Bed reported PIN rejected (0x18)")
+                        return False
+            finally:
+                try:
+                    await client.stop_notify(BLE_CHAR_UUID)
+                except Exception:
+                    pass
+
+            # Fallback: no notification or unknown format – wait and see if device disconnects
             await asyncio.sleep(5.0)
             if not client.is_connected:
                 _LOGGER.debug("Device disconnected after keep-alive (wrong PIN or not bed base)")
