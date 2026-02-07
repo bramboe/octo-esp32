@@ -127,13 +127,46 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         address: str = "",
     ) -> FlowResult:
         """Confirm and complete setup of a discovered device (PIN only; MAC/name come from discovery)."""
-        # Resuming after "Testing connection..." progress
+        # Re-entry after progress: result may be in context (survives flow re-invoke)
+        stored_result = self.context.pop("_confirm_result", None)
+        stored_pending = self.context.pop("_confirm_pending", None)
+        if stored_result is not None and stored_pending is not None:
+            if stored_result == "ok":
+                data = {
+                    CONF_DEVICE_NAME: stored_pending["name"],
+                    CONF_DEVICE_ADDRESS: stored_pending["address"],
+                    CONF_PIN: stored_pending["pin"],
+                    CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
+                    CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
+                }
+                if stored_pending.get("nickname"):
+                    data[CONF_DEVICE_NICKNAME] = stored_pending["nickname"]
+                self._pending_entry = (_entry_title_from_data(data), data)
+                return self.async_show_progress_done(next_step_id="create_entry")
+            # Show form with error
+            err = "connection_timeout" if stored_result == "timeout" else ("no_pin_check" if stored_result == "no_pin_check" else "invalid_pin")
+            return self.async_show_form(
+                step_id="confirm_bluetooth",
+                data_schema=vol.Schema({
+                    vol.Required(CONF_PIN, default=stored_pending.get("pin", DEFAULT_PIN)): str,
+                    vol.Optional(CONF_DEVICE_NICKNAME, default=stored_pending.get("nickname", "")): str,
+                }),
+                description_placeholders={
+                    "name": stored_pending.get("name", "Octo Bed"),
+                    "address": stored_pending.get("address", ""),
+                    "mac": stored_pending.get("address", ""),
+                },
+                errors={"base": err},
+            )
+
+        # Resuming while "Testing connection..." progress is still running
         task = getattr(self, "_confirm_validate_task", None)
         if task is not None:
             if not task.done():
                 return self.async_show_progress(
                     progress_action="testing_connection",
                     progress_task=task,
+                    progress_task_done_message="testing_connection_done",
                 )
             try:
                 result = task.result()
@@ -141,32 +174,10 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug("Validation task error: %s", e)
                 result = "wrong_pin"
             del self._confirm_validate_task
-            if result == "timeout":
-                self._confirm_validation_failed = True
-                self._confirm_timeout = True
-                return self.async_show_progress_done(next_step_id="confirm_bluetooth")
-            if result == "no_pin_check":
-                self._confirm_validation_failed = True
-                self._confirm_no_pin_check = True
-                return self.async_show_progress_done(next_step_id="confirm_bluetooth")
-            if result == "wrong_pin":
-                self._confirm_validation_failed = True
-                self._confirm_no_pin_check = False
-                return self.async_show_progress_done(next_step_id="confirm_bluetooth")
-            if result == "ok":
-                pending = self._confirm_pending
-                data = {
-                    CONF_DEVICE_NAME: pending["name"],
-                    CONF_DEVICE_ADDRESS: pending["address"],
-                    CONF_PIN: pending["pin"],
-                    CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
-                    CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
-                }
-                if pending.get("nickname"):
-                    data[CONF_DEVICE_NICKNAME] = pending["nickname"]
-                self._pending_entry = (_entry_title_from_data(data), data)
-                return self.async_show_progress_done(next_step_id="create_entry")
-            self._confirm_validation_failed = True
+            pending = getattr(self, "_confirm_pending", {})
+            # Persist in context so next re-entry (after show_progress_done) can show form or create entry
+            self.context["_confirm_result"] = result
+            self.context["_confirm_pending"] = pending
             return self.async_show_progress_done(next_step_id="confirm_bluetooth")
 
         if getattr(self, "_confirm_validation_failed", False):
@@ -213,6 +224,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_progress(
                 progress_action="testing_connection",
                 progress_task=self._confirm_validate_task,
+                progress_task_done_message="testing_connection_done",
             )
 
         self.context["discovered_name"] = name
@@ -341,12 +353,38 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_manual(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Manual entry (device name, MAC, device name/nickname, PIN)."""
+        # Re-entry after progress: result in context (survives flow re-invoke)
+        stored_result = self.context.pop("_manual_result", None)
+        stored_pending = self.context.pop("_manual_pending", None)
+        if stored_result is not None and stored_pending is not None:
+            if stored_result == "ok":
+                data = {
+                    CONF_DEVICE_NAME: stored_pending["device_name"],
+                    CONF_DEVICE_ADDRESS: stored_pending["addr"],
+                    CONF_PIN: stored_pending["pin"],
+                    CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
+                    CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
+                }
+                if stored_pending.get("nickname"):
+                    data[CONF_DEVICE_NICKNAME] = stored_pending["nickname"]
+                self._pending_entry = (_entry_title_from_data(data), data)
+                return self.async_show_progress_done(next_step_id="create_entry")
+            err = "connection_timeout" if stored_result == "timeout" else ("no_pin_check" if stored_result == "no_pin_check" else "invalid_pin")
+            schema = vol.Schema({
+                vol.Required(CONF_DEVICE_NAME, default=stored_pending.get("device_name", DEFAULT_DEVICE_NAME)): str,
+                vol.Required(CONF_DEVICE_ADDRESS, default=stored_pending.get("addr", "")): str,
+                vol.Optional(CONF_DEVICE_NICKNAME, default=stored_pending.get("nickname", "")): str,
+                vol.Required(CONF_PIN, default=stored_pending.get("pin", DEFAULT_PIN)): str,
+            })
+            return self.async_show_form(step_id="manual", data_schema=schema, errors={"base": err})
+
         task = getattr(self, "_manual_validate_task", None)
         if task is not None:
             if not task.done():
                 return self.async_show_progress(
                     progress_action="testing_connection",
                     progress_task=task,
+                    progress_task_done_message="testing_connection_done",
                 )
             try:
                 result = task.result()
@@ -354,32 +392,9 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug("Validation task error: %s", e)
                 result = "wrong_pin"
             del self._manual_validate_task
-            if result == "timeout":
-                self._manual_validation_failed = True
-                self._manual_timeout = True
-                return self.async_show_progress_done(next_step_id="manual")
-            if result == "no_pin_check":
-                self._manual_validation_failed = True
-                self._manual_no_pin_check = True
-                return self.async_show_progress_done(next_step_id="manual")
-            if result == "wrong_pin":
-                self._manual_validation_failed = True
-                self._manual_no_pin_check = False
-                return self.async_show_progress_done(next_step_id="manual")
-            if result == "ok":
-                pending = self._manual_pending
-                data = {
-                    CONF_DEVICE_NAME: pending["device_name"],
-                    CONF_DEVICE_ADDRESS: pending["addr"],
-                    CONF_PIN: pending["pin"],
-                    CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
-                    CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
-                }
-                if pending.get("nickname"):
-                    data[CONF_DEVICE_NICKNAME] = pending["nickname"]
-                self._pending_entry = (_entry_title_from_data(data), data)
-                return self.async_show_progress_done(next_step_id="create_entry")
-            self._manual_validation_failed = True
+            pending = getattr(self, "_manual_pending", {})
+            self.context["_manual_result"] = result
+            self.context["_manual_pending"] = pending
             return self.async_show_progress_done(next_step_id="manual")
 
         if getattr(self, "_manual_validation_failed", False):
@@ -433,6 +448,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_progress(
                 progress_action="testing_connection",
                 progress_task=self._manual_validate_task,
+                progress_task_done_message="testing_connection_done",
             )
 
         return self.async_show_form(step_id="manual", data_schema=STEP_USER_SCHEMA)
