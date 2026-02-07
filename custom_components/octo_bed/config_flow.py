@@ -166,7 +166,6 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_show_progress(
                     progress_action="testing_connection",
                     progress_task=task,
-                    progress_task_done_message="testing_connection_done",
                 )
             try:
                 result = task.result()
@@ -224,7 +223,6 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_progress(
                 progress_action="testing_connection",
                 progress_task=self._confirm_validate_task,
-                progress_task_done_message="testing_connection_done",
             )
 
         self.context["discovered_name"] = name
@@ -384,7 +382,6 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_show_progress(
                     progress_action="testing_connection",
                     progress_task=task,
-                    progress_task_done_message="testing_connection_done",
                 )
             try:
                 result = task.result()
@@ -448,7 +445,6 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_progress(
                 progress_action="testing_connection",
                 progress_task=self._manual_validate_task,
-                progress_task_done_message="testing_connection_done",
             )
 
         return self.async_show_form(step_id="manual", data_schema=STEP_USER_SCHEMA)
