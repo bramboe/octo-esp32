@@ -51,6 +51,7 @@ from .const import (
     SET_PIN_PREFIX,
     MOVEMENT_COMMAND_INTERVAL_SEC,
     PIN_RESPONSE_ACCEPTED,
+    PIN_RESPONSE_NOT_SET,
     PIN_RESPONSE_REJECTED,
     PIN_RESPONSE_REJECTED_1B,
     PIN_RESPONSE_REJECTED_ALT,
@@ -82,8 +83,8 @@ def _make_set_pin(pin: str) -> bytes:
 
 
 def _parse_pin_response(data: bytes) -> bool | None:
-    """Parse bed notification after keep-alive. True = PIN accepted (0x1A), False = rejected (0x18, 0x1b, 0x00), None = unknown.
-    Accepts 40 21 ... or 46 21 ... prefix; status at index 5 or last byte. Wrong PIN: 40 21 43 00 01 1b 00 40."""
+    """Parse bed notification after keep-alive. True = PIN accepted (0x1A), False = rejected (0x18, 0x1b, 0x00, 0x1f), None = unknown.
+    Accepts 40 21 ... or 46 21 ... prefix; status at index 5 or last byte. 0x1f = no PIN set (e.g. after hard reset)."""
     if not data or len(data) < 2:
         return None
     if data[1] != 0x21:
@@ -93,7 +94,7 @@ def _parse_pin_response(data: bytes) -> bool | None:
     def accepted(s: int) -> bool:
         return s == PIN_RESPONSE_ACCEPTED
     def rejected(s: int) -> bool:
-        return s in (PIN_RESPONSE_REJECTED, PIN_RESPONSE_REJECTED_ALT, PIN_RESPONSE_REJECTED_1B)
+        return s in (PIN_RESPONSE_REJECTED, PIN_RESPONSE_REJECTED_ALT, PIN_RESPONSE_REJECTED_1B, PIN_RESPONSE_NOT_SET)
     # Check status at index 5 (40 21 43 00 01 XX ...)
     if len(data) > PIN_RESPONSE_STATUS_BYTE_INDEX:
         status = data[PIN_RESPONSE_STATUS_BYTE_INDEX]
@@ -656,11 +657,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await asyncio.wait_for(notif_event.wait(), timeout=3.0)
             except asyncio.TimeoutError:
                 pass
-            # Bed sends 40 21 3c... then 40 21 43 00 01 1a 01 40 (accepted)
+            # Bed sends 40 21 3c... then 40 21 43 00 01 1a 01 40 (accepted); or 40 21 3c 01 00 00 1f 40 (no PIN set yet)
             for data in received:
                 if _parse_pin_response(data) is True:
                     _LOGGER.info("Set PIN on device: bed accepted new PIN")
                     return True
+            if any(PIN_RESPONSE_NOT_SET in d for d in received):
+                _LOGGER.info(
+                    "Set PIN on device: bed reports no PIN set (e.g. after hard reset). Use set_pin service with your desired PIN to regain control."
+                )
             return False
         except Exception as e:
             _LOGGER.warning("Set PIN on device failed: %s", e)
@@ -1107,6 +1112,70 @@ async def probe_device_validates_pin(
     except Exception as e:
         _LOGGER.debug("Probe failed: %s", e)
         return False
+    finally:
+        if client:
+            await client.disconnect()
+
+
+async def set_pin_on_device_during_config(
+    hass: HomeAssistant,
+    address: str,
+    device_name: str,
+    pin: str,
+) -> str:
+    """Connect and send set-PIN command (40 20 3c...). Used when adding a device so the user does not need the app.
+    Returns: 'ok' (bed accepted with 0x1a), 'timeout' (no device or no response), 'set_pin_failed' (bed rejected or already has PIN)."""
+    pin = (pin or "0000").strip()[:4].ljust(4, "0")
+    addr = address and address.strip()
+    if not addr:
+        return "timeout"
+    ble_device = await _wait_for_ble_device(hass, addr)
+    if not ble_device:
+        _LOGGER.warning("Set PIN during config: no BLE device for %s", addr)
+        return "timeout"
+    client = None
+    try:
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            ble_device,
+            device_name or "Octo Bed",
+            disconnected_callback=None,
+            timeout=CONNECT_TIMEOUT,
+        )
+        set_pin_cmd = _make_set_pin(pin)
+        received: list[bytes] = []
+        notif_event = asyncio.Event()
+
+        def _on_notification(_char_handle: int, data: bytearray) -> None:
+            received.append(bytes(data))
+            notif_event.set()
+
+        try:
+            await client.start_notify(BLE_CHAR_UUID, _on_notification)
+        except Exception as e:
+            _LOGGER.debug("Set PIN during config: could not start notifications: %s", e)
+            return "set_pin_failed"
+        try:
+            await client.write_gatt_char(BLE_CHAR_UUID, set_pin_cmd, response=True)
+        except Exception:
+            try:
+                await client.write_gatt_char(BLE_CHAR_UUID, set_pin_cmd, response=False)
+            except Exception:
+                return "set_pin_failed"
+        try:
+            await asyncio.wait_for(notif_event.wait(), timeout=3.0)
+        except asyncio.TimeoutError:
+            pass
+        for data in received:
+            if _parse_pin_response(data) is True:
+                _LOGGER.info("Set PIN during config: bed accepted new PIN")
+                return "ok"
+        return "set_pin_failed"
+    except asyncio.TimeoutError:
+        return "timeout"
+    except Exception as e:
+        _LOGGER.warning("Set PIN during config failed for %s: %s", addr, e)
+        return "set_pin_failed"
     finally:
         if client:
             await client.disconnect()
