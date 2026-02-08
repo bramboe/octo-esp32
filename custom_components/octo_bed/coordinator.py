@@ -38,6 +38,7 @@ from .const import (
     MOVEMENT_COMMAND_INTERVAL_SEC,
     PIN_RESPONSE_ACCEPTED,
     PIN_RESPONSE_REJECTED,
+    PIN_RESPONSE_REJECTED_1B,
     PIN_RESPONSE_REJECTED_ALT,
     PIN_RESPONSE_STATUS_BYTE_INDEX,
     WRITE_TIMEOUT,
@@ -67,8 +68,8 @@ def _make_set_pin(pin: str) -> bytes:
 
 
 def _parse_pin_response(data: bytes) -> bool | None:
-    """Parse bed notification after keep-alive. True = PIN accepted (0x1A), False = rejected (0x18 or 0x00), None = unknown.
-    Accepts 40 21 ... or 46 21 ... prefix; status at index 5 or last byte. Some beds send 46 21 43 80 01 36 00 for wrong PIN."""
+    """Parse bed notification after keep-alive. True = PIN accepted (0x1A), False = rejected (0x18, 0x1b, 0x00), None = unknown.
+    Accepts 40 21 ... or 46 21 ... prefix; status at index 5 or last byte. Wrong PIN: 40 21 43 00 01 1b 00 40."""
     if not data or len(data) < 2:
         return None
     if data[1] != 0x21:
@@ -78,7 +79,7 @@ def _parse_pin_response(data: bytes) -> bool | None:
     def accepted(s: int) -> bool:
         return s == PIN_RESPONSE_ACCEPTED
     def rejected(s: int) -> bool:
-        return s == PIN_RESPONSE_REJECTED or s == PIN_RESPONSE_REJECTED_ALT
+        return s in (PIN_RESPONSE_REJECTED, PIN_RESPONSE_REJECTED_ALT, PIN_RESPONSE_REJECTED_1B)
     # Check status at index 5 (40 21 43 00 01 XX ...)
     if len(data) > PIN_RESPONSE_STATUS_BYTE_INDEX:
         status = data[PIN_RESPONSE_STATUS_BYTE_INDEX]
