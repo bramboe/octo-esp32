@@ -29,19 +29,6 @@ from .const import (
     CMD_LIGHT_ON,
     CMD_MAKE_DISCOVERABLE,
     CMD_SOFT_RESET,
-    CMD_TEST_70,
-    CMD_TEST_71,
-    CMD_TEST_7F,
-    CMD_TRY_HARD_AD,
-    CMD_TRY_HARD_AF,
-    CMD_TRY_HARD_B0,
-    CMD_TRY_HARD_B1,
-    CMD_TRY_HARD_B3,
-    CMD_TRY_HARD_B4,
-    CMD_TRY_HARD_CF,
-    CMD_TRY_HARD_D0,
-    CMD_TRY_HARD_D2,
-    CMD_TRY_HARD_D3,
     CMD_STOP,
     DEFAULT_FEET_CALIBRATION_SEC,
     DEFAULT_HEAD_CALIBRATION_SEC,
@@ -146,9 +133,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_task: asyncio.Task[None] | None = None
         self._calibration_active = False
         self._calibration_stop_event: asyncio.Event | None = None
-        # Hard-reset scan: send many candidate commands with delay; stop button sets this
-        self._hard_reset_scan_task: asyncio.Task[None] | None = None
-        self._hard_reset_scan_stop: asyncio.Event | None = None
+        # Test scan: send pattern-based system commands with delay; Stop test scan cancels it
+        self._test_scan_task: asyncio.Task[None] | None = None
+        self._test_scan_stop: asyncio.Event | None = None
         # True only after we've sent keep-alive with PIN and device stayed connected (wrong PIN = disconnect)
         self._authenticated: bool = False
         # Last FFE1 notification that was not a PIN response (e.g. c0 21 status) – for diagnostics / future parsing
@@ -507,112 +494,69 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Send soft/low reset (40 20 ae 00 00 b2 40). Does not require re-adding the bed."""
         return await self._send_command(CMD_SOFT_RESET)
 
-    async def async_send_test_7f(self) -> bool:
-        """Send test command 7f and capture reply. See BLE status sensor last_device_notification."""
-        return await self._send_command_and_capture_notification(CMD_TEST_7F)
+    async def async_send_system_command(self, family: str, opcode: int) -> bool:
+        """Build and send a system command by pattern. family='short' -> 7 bytes (40 20 OP 00 00 CK 40, CK=0x160-OP). family='72' -> 15 bytes (40 20 72 00 08 OP ...)."""
+        op = opcode & 0xFF
+        if family == "short":
+            cmd = bytes([0x40, 0x20, op, 0x00, 0x00, (0x160 - op) & 0xFF, 0x40])
+        elif family == "72":
+            cmd = bytes([
+                0x40, 0x20, 0x72, 0x00, 0x08, op, 0x00, 0x00,
+                0x10, 0x01, 0x01, 0x01, 0x01, 0x01, 0x40,
+            ])
+        else:
+            return False
+        return await self._send_command(cmd)
 
-    async def async_send_test_70(self) -> bool:
-        """Send test command 70 and capture reply. See BLE status sensor last_device_notification."""
-        return await self._send_command_and_capture_notification(CMD_TEST_70)
+    # Test scan: (family, opcode) per set. Press Stop test scan to cancel.
+    _TEST_SCAN_DELAY_SEC = 0.25
+    _TEST_SCAN_SETS: dict[int, list[tuple[str, int]]] = {
+        1: [("short", 0x6E), ("short", 0x6F), ("short", 0x70), ("short", 0x71), ("short", 0x72)],
+        2: [("short", 0x7E), ("short", 0x7F), ("short", 0x80), ("short", 0xAD), ("short", 0xAE), ("short", 0xAF)],
+        3: [("72", 0xD0), ("72", 0xD1), ("72", 0xD2), ("72", 0xD3), ("72", 0xD4)],
+        4: [("72", x) for x in (0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD)],
+    }
 
-    async def async_send_test_71(self) -> bool:
-        """Send test command 71 and capture reply. See BLE status sensor last_device_notification."""
-        return await self._send_command_and_capture_notification(CMD_TEST_71)
-
-    async def async_send_try_hard_af(self) -> bool:
-        """Try hard-reset candidate (AE+1). Capture reply in BLE status sensor."""
-        return await self._send_command_and_capture_notification(CMD_TRY_HARD_AF)
-
-    async def async_send_try_hard_ad(self) -> bool:
-        """Try hard-reset candidate (AE-1). Capture reply in BLE status sensor."""
-        return await self._send_command_and_capture_notification(CMD_TRY_HARD_AD)
-
-    async def async_send_try_hard_b3(self) -> bool:
-        """Try hard-reset candidate (B2+1). Capture reply in BLE status sensor."""
-        return await self._send_command_and_capture_notification(CMD_TRY_HARD_B3)
-
-    async def async_send_try_hard_b1(self) -> bool:
-        """Try hard-reset candidate (B2-1). Capture reply in BLE status sensor."""
-        return await self._send_command_and_capture_notification(CMD_TRY_HARD_B1)
-
-    async def async_send_try_hard_d0(self) -> bool:
-        """Try hard-reset candidate (72 D0). Capture reply in BLE status sensor."""
-        return await self._send_command_and_capture_notification(CMD_TRY_HARD_D0)
-
-    async def async_send_try_hard_d2(self) -> bool:
-        """Try hard-reset candidate (72 D2). Capture reply in BLE status sensor."""
-        return await self._send_command_and_capture_notification(CMD_TRY_HARD_D2)
-
-    # Commands to cycle through in hard-reset scan (50 sends with delay; stop when you see reset).
-    # Hard-reset candidates only (no soft reset). Grouped into 4 sets for easier identification.
-    _HARD_RESET_SCAN_SET_1 = (CMD_TRY_HARD_AF, CMD_TRY_HARD_AD)   # opcode ±1: AF, AD
-    _HARD_RESET_SCAN_SET_2 = (CMD_TRY_HARD_B3, CMD_TRY_HARD_B1)   # suffix B2±1: B3, B1
-    _HARD_RESET_SCAN_SET_3 = (CMD_TRY_HARD_D0, CMD_TRY_HARD_D2)   # 72 family: D0, D2
-    _HARD_RESET_SCAN_SET_4 = (CMD_TRY_HARD_B0, CMD_TRY_HARD_B4, CMD_TRY_HARD_D3, CMD_TRY_HARD_CF)  # B2±2, 72 D3/CF
-    _HARD_RESET_SCAN_COMMANDS = (
-        *_HARD_RESET_SCAN_SET_1,
-        *_HARD_RESET_SCAN_SET_2,
-        *_HARD_RESET_SCAN_SET_3,
-        *_HARD_RESET_SCAN_SET_4,
-    )
-    # (set_number_1based, command_label) for each command, for logging
-    _HARD_RESET_SCAN_SET_AND_LABEL = (
-        (1, "AF"), (1, "AD"),
-        (2, "B3"), (2, "B1"),
-        (3, "D0"), (3, "D2"),
-        (4, "B0"), (4, "B4"), (4, "D3"), (4, "CF"),
-    )
-    _HARD_RESET_SCAN_COUNT = 50
-    _HARD_RESET_SCAN_DELAY_SEC = 0.25
-
-    async def _run_hard_reset_scan(self) -> None:
-        """Send candidate commands in a loop; stop when _hard_reset_scan_stop is set."""
-        stop = self._hard_reset_scan_stop
-        commands = self._HARD_RESET_SCAN_COMMANDS
-        set_and_label = self._HARD_RESET_SCAN_SET_AND_LABEL
+    async def _run_test_scan(self, set_id: int) -> None:
+        """Send commands for the given set with delay; stop when _test_scan_stop is set."""
+        stop = self._test_scan_stop
+        commands = self._TEST_SCAN_SETS.get(set_id, [])
         try:
-            for i in range(self._HARD_RESET_SCAN_COUNT):
+            for i, (family, opcode) in enumerate(commands):
                 if stop and stop.is_set():
-                    _LOGGER.debug("Hard reset scan stopped by user")
+                    _LOGGER.debug("Test scan set %s stopped by user", set_id)
                     break
-                idx = i % len(commands)
-                cmd = commands[idx]
-                set_no, label = set_and_label[idx]
-                _LOGGER.info(
-                    "Hard reset scan %s/%s — set %s/4: %s",
-                    i + 1, self._HARD_RESET_SCAN_COUNT, set_no, label,
-                )
-                await self._send_command(cmd)
-                await asyncio.sleep(self._HARD_RESET_SCAN_DELAY_SEC)
+                _LOGGER.info("Test scan set %s: sending %s 0x%02X (%s/%s)", set_id, family, opcode, i + 1, len(commands))
+                await self.async_send_system_command(family, opcode)
+                await asyncio.sleep(self._TEST_SCAN_DELAY_SEC)
         except asyncio.CancelledError:
             pass
         finally:
-            self._hard_reset_scan_task = None
+            self._test_scan_task = None
 
-    def async_start_hard_reset_scan(self) -> None:
-        """Start sending candidate commands in a loop (50 with delay). Use Stop hard reset scan to abort."""
-        if self._hard_reset_scan_task is not None and not self._hard_reset_scan_task.done():
+    def async_start_test_scan(self, set_id: int) -> None:
+        """Start sending test-set commands (use Stop test scan to cancel)."""
+        if set_id not in self._TEST_SCAN_SETS:
             return
-        self._hard_reset_scan_stop = asyncio.Event()
-        self._hard_reset_scan_stop.clear()
-        self._hard_reset_scan_task = self.hass.async_create_task(self._run_hard_reset_scan())
-        _LOGGER.info(
-            "Hard reset scan started (%s sends, %.1fs delay). Sets: 1=AF,AD 2=B3,B1 3=D0,D2 4=B0,B4,D3,CF — press Stop when you see reset and check log for last set",
-            self._HARD_RESET_SCAN_COUNT, self._HARD_RESET_SCAN_DELAY_SEC,
-        )
+        if self._test_scan_task is not None and not self._test_scan_task.done():
+            return
+        self._test_scan_stop = asyncio.Event()
+        self._test_scan_stop.clear()
+        self._test_scan_task = self.hass.async_create_task(self._run_test_scan(set_id))
+        _LOGGER.info("Test scan set %s started (%s commands); press Stop test scan to cancel", set_id, len(self._TEST_SCAN_SETS[set_id]))
 
-    def async_stop_hard_reset_scan(self) -> None:
-        """Stop the hard-reset scan loop."""
-        if self._hard_reset_scan_stop:
-            self._hard_reset_scan_stop.set()
-        if self._hard_reset_scan_task is not None and not self._hard_reset_scan_task.done():
-            self._hard_reset_scan_task.cancel()
-        self._hard_reset_scan_task = None
+    def async_stop_test_scan(self) -> None:
+        """Stop the test scan loop."""
+        if self._test_scan_stop:
+            self._test_scan_stop.set()
+        if self._test_scan_task is not None and not self._test_scan_task.done():
+            self._test_scan_task.cancel()
+        self._test_scan_task = None
 
     @property
-    def hard_reset_scan_running(self) -> bool:
-        """True if the hard-reset scan loop is running."""
-        return self._hard_reset_scan_task is not None and not self._hard_reset_scan_task.done()
+    def test_scan_running(self) -> bool:
+        """True if a test scan is running."""
+        return self._test_scan_task is not None and not self._test_scan_task.done()
 
     async def async_set_pin_on_device(self, new_pin: str) -> bool:
         """Send first-time set-PIN command (40 20 3c...). Use after hard reset to set or change PIN on the device. Returns True if bed replied with 0x1A (accepted)."""
