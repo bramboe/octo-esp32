@@ -130,12 +130,15 @@ class OctoBedBleStatusSensor(OctoBedEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, str | bool]:
         data = self.coordinator.data or {}
-        return {
+        attrs: dict[str, str | bool] = {
             "device_name": self.coordinator.device_name,
             "mac_address": self.coordinator.device_address or "Not set",
             "connected": data.get("connected", False),
             "connection_status": data.get("connection_status", "disconnected"),
         }
+        if data.get("last_device_notification"):
+            attrs["last_device_notification"] = data["last_device_notification"]
+        return attrs
 
     @property
     def available(self) -> bool:
