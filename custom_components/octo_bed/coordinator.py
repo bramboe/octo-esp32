@@ -136,6 +136,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Test scan: send pattern-based system commands with delay; Stop test scan cancels it
         self._test_scan_task: asyncio.Task[None] | None = None
         self._test_scan_stop: asyncio.Event | None = None
+        self._test_scan_last_desc: str = ""
+        self._test_scan_last_index: int = 0
+        self._test_scan_total: int = 0
+        self._test_scan_set_id: int = 0
         # True only after we've sent keep-alive with PIN and device stayed connected (wrong PIN = disconnect)
         self._authenticated: bool = False
         # Last FFE1 notification that was not a PIN response (e.g. c0 21 status) – for diagnostics / future parsing
@@ -245,6 +249,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         if self._last_device_notification_hex:
             data["last_device_notification"] = self._last_device_notification_hex
+        if self._test_scan_total and self._test_scan_last_index:
+            data["last_test_command"] = f"{self._test_scan_last_desc} ({self._test_scan_last_index}/{self._test_scan_total})"
+            data["last_test_set_id"] = self._test_scan_set_id
         return data
 
     async def _check_pin_accepted(self) -> bool:
@@ -490,17 +497,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ok2 = await self._send_command(CMD_MAKE_DISCOVERABLE)
         return ok1 or ok2
 
-    async def async_send_hard_reset_10x_discoverable(self) -> bool:
-        """Send make-discoverable command 10 times (hub button 10× = hard reset). Device will need re-adding/set_pin."""
-        cmd = CMD_MAKE_DISCOVERABLE
-        delay = 0.5
-        last_ok = False
-        for i in range(10):
-            last_ok = await self._send_command(cmd)
-            if i < 9:
-                await asyncio.sleep(delay)
-        return last_ok
-
     async def async_send_soft_reset(self) -> bool:
         """Send soft/low reset (40 20 ae 00 00 b2 40). Does not require re-adding the bed."""
         return await self._send_command(CMD_SOFT_RESET)
@@ -520,25 +516,36 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return await self._send_command(cmd)
 
     # Test scan: (family, opcode) per set. Press Stop test scan to cancel.
-    # Set 3 twice = teach remote (D1). Set 2 excludes 0xAE (use Soft reset for that).
+    # Set 2 excludes 0xAE (use Soft reset). Set 3 removed: D0–D4 disables BLE control.
+    # Set 5: ~50 commands to find hard reset; stop when you see it happen, then check BLE status "last_test_command".
     _TEST_SCAN_DELAY_SEC = 0.25
     _TEST_SCAN_SETS: dict[int, list[tuple[str, int]]] = {
         1: [("short", 0x6E), ("short", 0x6F), ("short", 0x70), ("short", 0x71), ("short", 0x72)],
-        2: [("short", 0x7E), ("short", 0x7F), ("short", 0x80), ("short", 0xAD), ("short", 0xAF)],  # no 0xAE (use Soft reset)
-        3: [("72", 0xD0), ("72", 0xD1), ("72", 0xD2), ("72", 0xD3), ("72", 0xD4)],  # D1 = discoverable (press twice = teach remote)
+        2: [("short", 0x7E), ("short", 0x7F), ("short", 0x80), ("short", 0xAD), ("short", 0xAF)],
         4: [("72", x) for x in (0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD)],
+        5: (
+            [("short", x) for x in range(0xA0, 0xC0)]
+            + [("72", x) for x in list(range(0xC0, 0xCA)) + list(range(0xE0, 0xE8))]
+        ),
     }
 
     async def _run_test_scan(self, set_id: int) -> None:
         """Send commands for the given set with delay; stop when _test_scan_stop is set."""
         stop = self._test_scan_stop
         commands = self._TEST_SCAN_SETS.get(set_id, [])
+        total = len(commands)
+        self._test_scan_set_id = set_id
+        self._test_scan_total = total
         try:
             for i, (family, opcode) in enumerate(commands):
                 if stop and stop.is_set():
                     _LOGGER.debug("Test scan set %s stopped by user", set_id)
                     break
-                _LOGGER.info("Test scan set %s: sending %s 0x%02X (%s/%s)", set_id, family, opcode, i + 1, len(commands))
+                idx = i + 1
+                desc = f"{family} 0x{opcode:02X}"
+                self._test_scan_last_desc = desc
+                self._test_scan_last_index = idx
+                _LOGGER.info("Test scan set %s: sending %s (%s/%s)", set_id, desc, idx, total)
                 await self.async_send_system_command(family, opcode)
                 await asyncio.sleep(self._TEST_SCAN_DELAY_SEC)
         except asyncio.CancelledError:
