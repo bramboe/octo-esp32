@@ -46,3 +46,35 @@ set_pin:
       selector:
         device:
           integration: octo_bed
+
+# Send a system command by pattern (for testing/discovery). Use Developer Tools > Services.
+# Patterns: "short" = 40 20 [opcode] 00 00 [checksum] 40 (known: 0x70, 0x71, 0x7F, 0xAE). "72" = 40 20 72 00 08 [opcode] ... (known: 0xD1 discoverable, 0xDE light on, 0xDF light off). If 0x1A and 0x3A do something, try 0x2A.
+send_system_command:
+  name: Send system command
+  description: "Send a system command by family and opcode (0-255). short = 7-byte form (opcodes e.g. 0x70, 0x71, 0x7F, 0xAE). 72 = 15-byte 72-family (opcodes e.g. 0xD1, 0xDE, 0xDF). Check BLE status sensor for response. Use to try gaps between known commands (e.g. 0x2A between 0x1A and 0x3A)."
+  fields:
+    command_family:
+      name: Command family
+      description: "short (7 bytes) or 72 (72-family 15 bytes)"
+      required: true
+      selector:
+        select:
+          options:
+            - short
+            - "72"
+    opcode:
+      name: Opcode
+      description: Byte value 0-255 (hex e.g. 0xAE for soft reset in short family)
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 255
+          step: 1
+    device_id:
+      name: Device
+      description: Octo Bed device (optional if you have only one)
+      required: false
+      selector:
+        device:
+          integration: octo_bed
