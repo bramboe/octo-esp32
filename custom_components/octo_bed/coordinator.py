@@ -484,11 +484,22 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return await self._send_command(CMD_STOP)
 
     async def async_send_make_discoverable(self) -> bool:
-        """Send make-discoverable command twice (like pressing remote twice after reset)."""
+        """Send make-discoverable command twice (like pressing hub button 2× = teach remote)."""
         ok1 = await self._send_command(CMD_MAKE_DISCOVERABLE)
         await asyncio.sleep(0.5)
         ok2 = await self._send_command(CMD_MAKE_DISCOVERABLE)
         return ok1 or ok2
+
+    async def async_send_hard_reset_10x_discoverable(self) -> bool:
+        """Send make-discoverable command 10 times (hub button 10× = hard reset). Device will need re-adding/set_pin."""
+        cmd = CMD_MAKE_DISCOVERABLE
+        delay = 0.5
+        last_ok = False
+        for i in range(10):
+            last_ok = await self._send_command(cmd)
+            if i < 9:
+                await asyncio.sleep(delay)
+        return last_ok
 
     async def async_send_soft_reset(self) -> bool:
         """Send soft/low reset (40 20 ae 00 00 b2 40). Does not require re-adding the bed."""
