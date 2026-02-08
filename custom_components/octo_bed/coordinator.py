@@ -509,16 +509,13 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return await self._send_command(cmd)
 
     # Test scan: (family, opcode) per set. Press Stop test scan to cancel.
-    # Set 3 twice = teach remote (D1). Set 2 used to include 0xAE (soft-reset); removed so set 2 doesn't disable device.
-    # Sets 5–6 = hard-reset candidates (other short opcodes and 72-family).
+    # Set 3 twice = teach remote (D1). Set 2 excludes 0xAE (use Soft reset for that).
     _TEST_SCAN_DELAY_SEC = 0.25
     _TEST_SCAN_SETS: dict[int, list[tuple[str, int]]] = {
         1: [("short", 0x6E), ("short", 0x6F), ("short", 0x70), ("short", 0x71), ("short", 0x72)],
         2: [("short", 0x7E), ("short", 0x7F), ("short", 0x80), ("short", 0xAD), ("short", 0xAF)],  # no 0xAE (use Soft reset)
         3: [("72", 0xD0), ("72", 0xD1), ("72", 0xD2), ("72", 0xD3), ("72", 0xD4)],  # D1 = discoverable (press twice = teach remote)
         4: [("72", x) for x in (0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD)],
-        5: [("short", 0xAC), ("short", 0xB0), ("short", 0xB1), ("short", 0xB3), ("short", 0xB4)],  # hard-reset candidates (near AE)
-        6: [("72", 0xCF), ("72", 0xD3), ("72", 0xD4), ("72", 0xE0), ("72", 0xE1), ("72", 0xE2)],  # hard-reset candidates (72 family)
     }
 
     async def _run_test_scan(self, set_id: int) -> None:
