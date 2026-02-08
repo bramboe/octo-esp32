@@ -94,7 +94,7 @@ class OctoBedResetBleButton(OctoBedEntity, ButtonEntity):
 
 
 class OctoBedMakeDiscoverableButton(OctoBedEntity, ButtonEntity):
-    """Send make-discoverable command twice (teach new remote / make bed visible for pairing)."""
+    """Send make-discoverable command twice (hub 2× = teach new remote)."""
 
     _attr_name = "Make discoverable (teach new remote)"
     _attr_unique_id = "make_discoverable"
@@ -103,6 +103,19 @@ class OctoBedMakeDiscoverableButton(OctoBedEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.coordinator.async_send_make_discoverable()
+        self.async_write_ha_state()
+
+
+class OctoBedHardReset10xButton(OctoBedEntity, ButtonEntity):
+    """Send make-discoverable command 10 times (hub 10× = hard reset). Device will need re-adding; use set_pin after."""
+
+    _attr_name = "Hard reset (10× discoverable)"
+    _attr_unique_id = "hard_reset_10x_discoverable"
+    _attr_icon = "mdi:restart-alert"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_send_hard_reset_10x_discoverable()
         self.async_write_ha_state()
 
 
@@ -197,6 +210,7 @@ async def async_setup_entry(
         OctoBedCalibrateFeetButton(coordinator, entry),
         OctoBedCalibrationStopButton(coordinator, entry),
         OctoBedMakeDiscoverableButton(coordinator, entry),
+        OctoBedHardReset10xButton(coordinator, entry),
         OctoBedSoftResetButton(coordinator, entry),
         OctoBedTestSet1Button(coordinator, entry),
         OctoBedTestSet2Button(coordinator, entry),
