@@ -106,19 +106,6 @@ class OctoBedMakeDiscoverableButton(OctoBedEntity, ButtonEntity):
         self.async_write_ha_state()
 
 
-class OctoBedHardReset10xButton(OctoBedEntity, ButtonEntity):
-    """Send make-discoverable command 10 times (hub 10× = hard reset). Device will need re-adding; use set_pin after."""
-
-    _attr_name = "Hard reset (10× discoverable)"
-    _attr_unique_id = "hard_reset_10x_discoverable"
-    _attr_icon = "mdi:restart-alert"
-    _attr_entity_category = EntityCategory.CONFIG
-
-    async def async_press(self) -> None:
-        await self.coordinator.async_send_hard_reset_10x_discoverable()
-        self.async_write_ha_state()
-
-
 class OctoBedSoftResetButton(OctoBedEntity, ButtonEntity):
     """Send soft/low reset. Does not require re-adding the bed."""
 
@@ -158,19 +145,6 @@ class OctoBedTestSet2Button(OctoBedEntity, ButtonEntity):
         self.async_write_ha_state()
 
 
-class OctoBedTestSet3Button(OctoBedEntity, ButtonEntity):
-    """Send 72-family 0xD0–0xD4. Press twice to activate teach remote (D1). Press Stop test scan to cancel."""
-
-    _attr_name = "Test set 3 (72 D0–D4, twice = teach remote)"
-    _attr_unique_id = "test_set_3"
-    _attr_icon = "mdi:test-tube"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    async def async_press(self) -> None:
-        self.coordinator.async_start_test_scan(3)
-        self.async_write_ha_state()
-
-
 class OctoBedTestSet4Button(OctoBedEntity, ButtonEntity):
     """Send 72-family commands 0xD5–0xDD. Press Stop test scan to cancel."""
 
@@ -184,8 +158,21 @@ class OctoBedTestSet4Button(OctoBedEntity, ButtonEntity):
         self.async_write_ha_state()
 
 
+class OctoBedCommandCycleButton(OctoBedEntity, ButtonEntity):
+    """Send ~50 system commands (short 0xA0–0xBF, 72 0xC0–0xC9, 0xE0–0xE7) with 0.25s delay. Press Stop test scan when you see hard reset, then check BLE status last_test_command."""
+
+    _attr_name = "Start command cycle (~50)"
+    _attr_unique_id = "command_cycle"
+    _attr_icon = "mdi:play-circle"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    async def async_press(self) -> None:
+        self.coordinator.async_start_test_scan(5)
+        self.async_write_ha_state()
+
+
 class OctoBedStopTestScanButton(OctoBedEntity, ButtonEntity):
-    """Stop the running test scan (Test set 1–4)."""
+    """Stop the running test scan (Test set 1, 2, 4, or command cycle)."""
 
     _attr_name = "Stop test scan"
     _attr_unique_id = "stop_test_scan"
@@ -210,12 +197,11 @@ async def async_setup_entry(
         OctoBedCalibrateFeetButton(coordinator, entry),
         OctoBedCalibrationStopButton(coordinator, entry),
         OctoBedMakeDiscoverableButton(coordinator, entry),
-        OctoBedHardReset10xButton(coordinator, entry),
         OctoBedSoftResetButton(coordinator, entry),
         OctoBedTestSet1Button(coordinator, entry),
         OctoBedTestSet2Button(coordinator, entry),
-        OctoBedTestSet3Button(coordinator, entry),
         OctoBedTestSet4Button(coordinator, entry),
+        OctoBedCommandCycleButton(coordinator, entry),
         OctoBedStopTestScanButton(coordinator, entry),
         OctoBedResetBleButton(coordinator, entry),
     ])
