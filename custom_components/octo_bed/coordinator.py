@@ -27,12 +27,14 @@ from .const import (
     CMD_HEAD_UP,
     CMD_LIGHT_OFF,
     CMD_LIGHT_ON,
+    CMD_MAKE_DISCOVERABLE,
     CMD_STOP,
     DEFAULT_FEET_CALIBRATION_SEC,
     DEFAULT_HEAD_CALIBRATION_SEC,
     KEEP_ALIVE_INTERVAL_SEC,
     KEEP_ALIVE_PREFIX,
     KEEP_ALIVE_SUFFIX,
+    SET_PIN_PREFIX,
     MOVEMENT_COMMAND_INTERVAL_SEC,
     PIN_RESPONSE_ACCEPTED,
     PIN_RESPONSE_REJECTED,
@@ -52,6 +54,16 @@ def _make_keep_alive(pin: str) -> bytes:
     pin = pin[:4]
     digits = bytes([ord(c) - ord("0") for c in pin])
     return KEEP_ALIVE_PREFIX + digits + KEEP_ALIVE_SUFFIX
+
+
+def _make_set_pin(pin: str) -> bytes:
+    """Build first-time set-PIN packet (40 20 3c 04 00 04 02 01 + digits + 40). Bed replies with two notifications; second is 40 21 43 ... 1a (accepted)."""
+    pin = (pin or "0000").strip()
+    while len(pin) < 4:
+        pin = "0" + pin
+    pin = pin[:4]
+    digits = bytes([ord(c) - ord("0") for c in pin])
+    return SET_PIN_PREFIX + digits + KEEP_ALIVE_SUFFIX
 
 
 def _parse_pin_response(data: bytes) -> bool | None:
@@ -120,6 +132,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_stop_event: asyncio.Event | None = None
         # True only after we've sent keep-alive with PIN and device stayed connected (wrong PIN = disconnect)
         self._authenticated: bool = False
+        # Last FFE1 notification that was not a PIN response (e.g. c0 21 status) – for diagnostics / future parsing
+        self._last_device_notification_hex: str = ""
 
     @property
     def device_address(self) -> str | None:
@@ -212,7 +226,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             connection_status = "pin_not_accepted"
         else:
             connection_status = "connected"
-        return {
+        data: dict[str, Any] = {
             "head_position": self._head_position,
             "feet_position": self._feet_position,
             "light_on": self._light_on,
@@ -223,6 +237,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "connection_status": connection_status,
             "calibration_active": self._calibration_active,
         }
+        if self._last_device_notification_hex:
+            data["last_device_notification"] = self._last_device_notification_hex
+        return data
 
     async def _check_pin_accepted(self) -> bool:
         """Establish connection, send keep-alive with PIN. Use bed notification (0x1A=accepted, 0x18=rejected) when present, else fall back to disconnect behaviour."""
@@ -246,7 +263,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             notif_event = asyncio.Event()
 
             def _on_notification(_char_handle: int, data: bytearray) -> None:
-                received.append(bytes(data))
+                raw = bytes(data)
+                received.append(raw)
+                if _parse_pin_response(raw) is None:
+                    self._last_device_notification_hex = raw.hex()
                 notif_event.set()
 
             try:
@@ -408,6 +428,22 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_send_stop(self) -> bool:
         """Send stop command."""
         return await self._send_command(CMD_STOP)
+
+    async def async_send_make_discoverable(self) -> bool:
+        """Send make-discoverable command twice (like pressing remote twice after reset)."""
+        ok1 = await self._send_command(CMD_MAKE_DISCOVERABLE)
+        await asyncio.sleep(0.5)
+        ok2 = await self._send_command(CMD_MAKE_DISCOVERABLE)
+        return ok1 or ok2
+
+    async def async_send_device_reset(self) -> bool:
+        """Send make-discoverable command 10 times quickly (like pressing reset button 10x). May trigger device reset."""
+        any_ok = False
+        for _ in range(10):
+            if await self._send_command(CMD_MAKE_DISCOVERABLE):
+                any_ok = True
+            await asyncio.sleep(0.25)
+        return any_ok
 
     async def async_send_head_up(self) -> bool:
         return await self._send_command(CMD_HEAD_UP)
