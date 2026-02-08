@@ -133,9 +133,9 @@ class OctoBedTestSet1Button(OctoBedEntity, ButtonEntity):
 
 
 class OctoBedTestSet2Button(OctoBedEntity, ButtonEntity):
-    """Send short-form commands 0x7E, 0x7F, 0x80, 0xAD–0xAF (near 7F, AE). Press Stop test scan to cancel."""
+    """Send short-form 0x7E, 0x7F, 0x80, 0xAD, 0xAF (0xAE excluded — use Soft reset). Press Stop test scan to cancel."""
 
-    _attr_name = "Test set 2 (short 7E–80, AD–AF)"
+    _attr_name = "Test set 2 (short 7E–80, AD, AF)"
     _attr_unique_id = "test_set_2"
     _attr_icon = "mdi:test-tube"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -146,9 +146,9 @@ class OctoBedTestSet2Button(OctoBedEntity, ButtonEntity):
 
 
 class OctoBedTestSet3Button(OctoBedEntity, ButtonEntity):
-    """Send 72-family commands 0xD0–0xD4. Press Stop test scan to cancel."""
+    """Send 72-family 0xD0–0xD4. Press twice to activate teach remote (D1). Press Stop test scan to cancel."""
 
-    _attr_name = "Test set 3 (72 D0–D4)"
+    _attr_name = "Test set 3 (72 D0–D4, twice = teach remote)"
     _attr_unique_id = "test_set_3"
     _attr_icon = "mdi:test-tube"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -171,8 +171,34 @@ class OctoBedTestSet4Button(OctoBedEntity, ButtonEntity):
         self.async_write_ha_state()
 
 
+class OctoBedTestSet5Button(OctoBedEntity, ButtonEntity):
+    """Hard-reset candidates: short 0xAC, 0xB0, 0xB1, 0xB3, 0xB4 (near AE). Press Stop test scan to cancel."""
+
+    _attr_name = "Test set 5 (short AC, B0, B1, B3, B4 hard-reset)"
+    _attr_unique_id = "test_set_5"
+    _attr_icon = "mdi:test-tube"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    async def async_press(self) -> None:
+        self.coordinator.async_start_test_scan(5)
+        self.async_write_ha_state()
+
+
+class OctoBedTestSet6Button(OctoBedEntity, ButtonEntity):
+    """Hard-reset candidates: 72-family 0xCF, 0xD3, 0xD4, 0xE0–0xE2. Press Stop test scan to cancel."""
+
+    _attr_name = "Test set 6 (72 CF, D3–D4, E0–E2, hard-reset)"
+    _attr_unique_id = "test_set_6"
+    _attr_icon = "mdi:test-tube"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    async def async_press(self) -> None:
+        self.coordinator.async_start_test_scan(6)
+        self.async_write_ha_state()
+
+
 class OctoBedStopTestScanButton(OctoBedEntity, ButtonEntity):
-    """Stop the running test scan (Test set 1–4)."""
+    """Stop the running test scan (Test set 1–6)."""
 
     _attr_name = "Stop test scan"
     _attr_unique_id = "stop_test_scan"
@@ -202,6 +228,8 @@ async def async_setup_entry(
         OctoBedTestSet2Button(coordinator, entry),
         OctoBedTestSet3Button(coordinator, entry),
         OctoBedTestSet4Button(coordinator, entry),
+        OctoBedTestSet5Button(coordinator, entry),
+        OctoBedTestSet6Button(coordinator, entry),
         OctoBedStopTestScanButton(coordinator, entry),
         OctoBedResetBleButton(coordinator, entry),
     ])
