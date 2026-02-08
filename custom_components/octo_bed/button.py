@@ -106,19 +106,6 @@ class OctoBedMakeDiscoverableButton(OctoBedEntity, ButtonEntity):
         self.async_write_ha_state()
 
 
-class OctoBedDeviceResetButton(OctoBedEntity, ButtonEntity):
-    """Send make-discoverable command 10 times quickly (same as pressing physical reset 10x)."""
-
-    _attr_name = "Reset device"
-    _attr_unique_id = "reset_device"
-    _attr_icon = "mdi:restart"
-    _attr_entity_category = EntityCategory.CONFIG
-
-    async def async_press(self) -> None:
-        await self.coordinator.async_send_device_reset()
-        self.async_write_ha_state()
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -132,6 +119,5 @@ async def async_setup_entry(
         OctoBedCalibrateFeetButton(coordinator, entry),
         OctoBedCalibrationStopButton(coordinator, entry),
         OctoBedMakeDiscoverableButton(coordinator, entry),
-        OctoBedDeviceResetButton(coordinator, entry),
         OctoBedResetBleButton(coordinator, entry),
     ])
