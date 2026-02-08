@@ -723,7 +723,13 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return ok
 
     async def async_set_light(self, on: bool) -> bool:
-        ok = await self._send_command(CMD_LIGHT_ON if on else CMD_LIGHT_OFF)
+        if on:
+            ok = await self._send_command(CMD_LIGHT_ON)
+        else:
+            ok = await self._send_command(CMD_LIGHT_OFF)
+            if ok:
+                await asyncio.sleep(0.2)
+                await self._send_command(CMD_LIGHT_OFF)
         if ok:
             self._light_on = on
         return ok
