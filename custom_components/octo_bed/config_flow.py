@@ -262,18 +262,36 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_confirm_bluetooth_show_error(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show PIN error form after validation failed (wrong PIN / timeout / no_pin_check). Fixes spinner stuck when wrong PIN."""
+        """Show PIN error form after validation failed. Retry runs validation inline to avoid spinner stuck on second wrong PIN."""
         if user_input is not None:
-            # User submitted corrected PIN; re-run validation
             retry = self.context.pop("_confirm_retry_pending", None)
             if retry:
-                return await self.async_step_confirm_bluetooth(
-                    name=retry["name"],
-                    address=retry["address"],
-                    user_input={
-                        CONF_PIN: user_input.get(CONF_PIN, DEFAULT_PIN),
-                        CONF_DEVICE_NICKNAME: user_input.get(CONF_DEVICE_NICKNAME, ""),
-                    },
+                pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+                nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
+                name = retry.get("name", "Octo Bed")
+                address = retry.get("address", "")
+                result = await _validation_with_timeout(self.hass, address, name, pin)
+                if result == "ok":
+                    data = {
+                        CONF_DEVICE_NAME: name,
+                        CONF_DEVICE_ADDRESS: address,
+                        CONF_PIN: pin,
+                        CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
+                        CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
+                    }
+                    if nickname:
+                        data[CONF_DEVICE_NICKNAME] = nickname
+                    return self.async_create_entry(title=_entry_title_from_data(data), data=data)
+                err = "connection_timeout" if result == "timeout" else ("no_pin_check" if result == "no_pin_check" else "invalid_pin")
+                self.context["_confirm_retry_pending"] = {"name": name, "address": address, "pin": pin, "nickname": nickname}
+                return self.async_show_form(
+                    step_id="confirm_bluetooth_show_error",
+                    data_schema=vol.Schema({
+                        vol.Required(CONF_PIN, default=pin): str,
+                        vol.Optional(CONF_DEVICE_NICKNAME, default=nickname): str,
+                    }),
+                    description_placeholders={"name": name, "address": address, "mac": address},
+                    errors={"base": err},
                 )
         stored_result = self.context.pop("_confirm_result", None)
         stored_pending = self.context.pop("_confirm_pending", None)
@@ -513,9 +531,42 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_manual_show_error(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show PIN error form after validation failed. Fixes spinner stuck when wrong PIN."""
+        """Show PIN error form after validation failed. Retry runs validation inline to avoid spinner stuck on second wrong PIN."""
         if user_input is not None:
-            return await self.async_step_manual(user_input=user_input)
+            device_name = (user_input.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
+            raw_mac = (user_input.get(CONF_DEVICE_ADDRESS) or "").strip()
+            pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+            nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
+            normalized_mac = _normalize_mac(raw_mac)
+            if not raw_mac or len(normalized_mac) != 12:
+                schema = vol.Schema({
+                    vol.Required(CONF_DEVICE_NAME, default=device_name): str,
+                    vol.Required(CONF_DEVICE_ADDRESS, default=raw_mac): str,
+                    vol.Optional(CONF_DEVICE_NICKNAME, default=nickname): str,
+                    vol.Required(CONF_PIN, default=pin): str,
+                })
+                return self.async_show_form(step_id="manual_show_error", data_schema=schema, errors={"base": "invalid_mac" if raw_mac else "mac_required"})
+            addr = _format_mac_display(normalized_mac)
+            result = await _validation_with_timeout(self.hass, addr, device_name, pin)
+            if result == "ok":
+                data = {
+                    CONF_DEVICE_NAME: device_name,
+                    CONF_DEVICE_ADDRESS: addr,
+                    CONF_PIN: pin,
+                    CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
+                    CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
+                }
+                if nickname:
+                    data[CONF_DEVICE_NICKNAME] = nickname
+                return self.async_create_entry(title=_entry_title_from_data(data), data=data)
+            err = "connection_timeout" if result == "timeout" else ("no_pin_check" if result == "no_pin_check" else "invalid_pin")
+            schema = vol.Schema({
+                vol.Required(CONF_DEVICE_NAME, default=device_name): str,
+                vol.Required(CONF_DEVICE_ADDRESS, default=raw_mac): str,
+                vol.Optional(CONF_DEVICE_NICKNAME, default=nickname): str,
+                vol.Required(CONF_PIN, default=pin): str,
+            })
+            return self.async_show_form(step_id="manual_show_error", data_schema=schema, errors={"base": err})
         stored_result = self.context.pop("_manual_result", None)
         stored_pending = self.context.pop("_manual_pending", None)
         if stored_result is None or stored_pending is None:
