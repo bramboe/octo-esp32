@@ -86,6 +86,7 @@ PIN_RESPONSE_ACCEPTED = 0x1A   # correct PIN
 PIN_RESPONSE_REJECTED = 0x18   # wrong PIN
 PIN_RESPONSE_REJECTED_ALT = 0x00  # some beds send 46 21 43 80 01 36 00 for wrong PIN
 PIN_RESPONSE_REJECTED_1B = 0x1B   # wrong PIN: bed sends 40 21 43 00 01 1b 00 40
+PIN_RESPONSE_NOT_SET = 0x1F   # no PIN set yet (e.g. after hard reset); bed sends 40 21 3c 01 00 00 1f 40 — cannot control until set_pin is used
 PIN_RESPONSE_STATUS_BYTE_INDEX = 5
 
 # Connection timeout
