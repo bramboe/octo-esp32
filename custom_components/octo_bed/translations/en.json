@@ -72,6 +72,7 @@
       "invalid_pin": "Wrong PIN or could not connect. Check the PIN and try again. Use the bed base BLE MAC, not the remote (RC2).",
       "no_pin_check": "This device does not verify the PIN (e.g. the RC2 remote). Use the bed base BLE MAC address so the PIN can be checked before adding.",
       "connection_timeout": "Connection timed out. Check the device is on, in range, and try again.",
+      "set_pin_failed": "Could not set PIN. The bed may already have a PIN—choose \"I already know the current PIN\" and enter it, or hard-reset the bed first.",
       "no_devices_found": "No Octo Bed remotes found. Ensure remotes are on and in range of your Bluetooth proxy."
     },
     "abort": {
