@@ -538,15 +538,24 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Try hard-reset candidate (72 D2). Capture reply in BLE status sensor."""
         return await self._send_command_and_capture_notification(CMD_TRY_HARD_D2)
 
-    # Commands to cycle through in hard-reset scan (50 sends with delay; stop when you see reset)
+    # Commands to cycle through in hard-reset scan (50 sends with delay; stop when you see reset).
+    # Same list as before, grouped into 4 sets so you can see in the log which set was active when the bed resets.
+    _HARD_RESET_SCAN_SET_1 = (CMD_TRY_HARD_AF, CMD_TRY_HARD_AD)   # opcode ±1: AF, AD
+    _HARD_RESET_SCAN_SET_2 = (CMD_TRY_HARD_B3, CMD_TRY_HARD_B1)   # suffix B2±1: B3, B1
+    _HARD_RESET_SCAN_SET_3 = (CMD_TRY_HARD_D0, CMD_TRY_HARD_D2)   # 72 family: D0, D2
+    _HARD_RESET_SCAN_SET_4 = (CMD_SOFT_RESET,)                     # soft reset
     _HARD_RESET_SCAN_COMMANDS = (
-        CMD_TRY_HARD_AF,
-        CMD_TRY_HARD_AD,
-        CMD_TRY_HARD_B3,
-        CMD_TRY_HARD_B1,
-        CMD_TRY_HARD_D0,
-        CMD_TRY_HARD_D2,
-        CMD_SOFT_RESET,
+        *_HARD_RESET_SCAN_SET_1,
+        *_HARD_RESET_SCAN_SET_2,
+        *_HARD_RESET_SCAN_SET_3,
+        *_HARD_RESET_SCAN_SET_4,
+    )
+    # (set_number_1based, command_label) for each command, for logging
+    _HARD_RESET_SCAN_SET_AND_LABEL = (
+        (1, "AF"), (1, "AD"),
+        (2, "B3"), (2, "B1"),
+        (3, "D0"), (3, "D2"),
+        (4, "soft reset"),
     )
     _HARD_RESET_SCAN_COUNT = 50
     _HARD_RESET_SCAN_DELAY_SEC = 0.25
@@ -555,12 +564,19 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Send candidate commands in a loop; stop when _hard_reset_scan_stop is set."""
         stop = self._hard_reset_scan_stop
         commands = self._HARD_RESET_SCAN_COMMANDS
+        set_and_label = self._HARD_RESET_SCAN_SET_AND_LABEL
         try:
             for i in range(self._HARD_RESET_SCAN_COUNT):
                 if stop and stop.is_set():
                     _LOGGER.debug("Hard reset scan stopped by user")
                     break
-                cmd = commands[i % len(commands)]
+                idx = i % len(commands)
+                cmd = commands[idx]
+                set_no, label = set_and_label[idx]
+                _LOGGER.info(
+                    "Hard reset scan %s/%s — set %s/4: %s",
+                    i + 1, self._HARD_RESET_SCAN_COUNT, set_no, label,
+                )
                 await self._send_command(cmd)
                 await asyncio.sleep(self._HARD_RESET_SCAN_DELAY_SEC)
         except asyncio.CancelledError:
@@ -575,7 +591,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._hard_reset_scan_stop = asyncio.Event()
         self._hard_reset_scan_stop.clear()
         self._hard_reset_scan_task = self.hass.async_create_task(self._run_hard_reset_scan())
-        _LOGGER.info("Hard reset scan started (%s sends, %.1fs delay); press Stop when you see reset", self._HARD_RESET_SCAN_COUNT, self._HARD_RESET_SCAN_DELAY_SEC)
+        _LOGGER.info(
+            "Hard reset scan started (%s sends, %.1fs delay). Sets: 1=AF,AD 2=B3,B1 3=D0,D2 4=soft reset — press Stop when you see reset and check log for last set",
+            self._HARD_RESET_SCAN_COUNT, self._HARD_RESET_SCAN_DELAY_SEC,
+        )
 
     def async_stop_hard_reset_scan(self) -> None:
         """Stop the hard-reset scan loop."""
