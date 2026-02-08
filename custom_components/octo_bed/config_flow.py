@@ -174,10 +174,23 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 result = "wrong_pin"
             del self._confirm_validate_task
             pending = getattr(self, "_confirm_pending", {})
-            # Persist in context so next re-entry (after show_progress_done) can show form or create entry
+            # Store in context first so it survives the transition
             self.context["_confirm_result"] = result
             self.context["_confirm_pending"] = pending
-            return self.async_show_progress_done(next_step_id="confirm_bluetooth")
+            # Use a dedicated step for failure so HA always re-invokes and shows the form (fixes spinner on wrong PIN)
+            if result == "ok":
+                data = {
+                    CONF_DEVICE_NAME: pending["name"],
+                    CONF_DEVICE_ADDRESS: pending["address"],
+                    CONF_PIN: pending["pin"],
+                    CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
+                    CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
+                }
+                if pending.get("nickname"):
+                    data[CONF_DEVICE_NICKNAME] = pending["nickname"]
+                self._pending_entry = (_entry_title_from_data(data), data)
+                return self.async_show_progress_done(next_step_id="create_entry")
+            return self.async_show_progress_done(next_step_id="confirm_bluetooth_show_error")
 
         if getattr(self, "_confirm_validation_failed", False):
             self._confirm_validation_failed = False
@@ -244,6 +257,42 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "address": address,
                 "mac": address,
             },
+        )
+
+    async def async_step_confirm_bluetooth_show_error(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show PIN error form after validation failed (wrong PIN / timeout / no_pin_check). Fixes spinner stuck when wrong PIN."""
+        if user_input is not None:
+            # User submitted corrected PIN; re-run validation
+            retry = self.context.pop("_confirm_retry_pending", None)
+            if retry:
+                return await self.async_step_confirm_bluetooth(
+                    name=retry["name"],
+                    address=retry["address"],
+                    user_input={
+                        CONF_PIN: user_input.get(CONF_PIN, DEFAULT_PIN),
+                        CONF_DEVICE_NICKNAME: user_input.get(CONF_DEVICE_NICKNAME, ""),
+                    },
+                )
+        stored_result = self.context.pop("_confirm_result", None)
+        stored_pending = self.context.pop("_confirm_pending", None)
+        if stored_result is None or stored_pending is None:
+            return await self.async_step_confirm_bluetooth()
+        err = "connection_timeout" if stored_result == "timeout" else ("no_pin_check" if stored_result == "no_pin_check" else "invalid_pin")
+        self.context["_confirm_retry_pending"] = stored_pending
+        return self.async_show_form(
+            step_id="confirm_bluetooth_show_error",
+            data_schema=vol.Schema({
+                vol.Required(CONF_PIN, default=stored_pending.get("pin", DEFAULT_PIN)): str,
+                vol.Optional(CONF_DEVICE_NICKNAME, default=stored_pending.get("nickname", "")): str,
+            }),
+            description_placeholders={
+                "name": stored_pending.get("name", "Octo Bed"),
+                "address": stored_pending.get("address", ""),
+                "mac": stored_pending.get("address", ""),
+            },
+            errors={"base": err},
         )
 
     async def async_step_create_entry(self, user_input: dict[str, Any] | None = None) -> FlowResult:
@@ -392,7 +441,19 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             pending = getattr(self, "_manual_pending", {})
             self.context["_manual_result"] = result
             self.context["_manual_pending"] = pending
-            return self.async_show_progress_done(next_step_id="manual")
+            if result == "ok":
+                data = {
+                    CONF_DEVICE_NAME: pending["device_name"],
+                    CONF_DEVICE_ADDRESS: pending["addr"],
+                    CONF_PIN: pending["pin"],
+                    CONF_HEAD_CALIBRATION_SEC: DEFAULT_HEAD_CALIBRATION_SEC,
+                    CONF_FEET_CALIBRATION_SEC: DEFAULT_FEET_CALIBRATION_SEC,
+                }
+                if pending.get("nickname"):
+                    data[CONF_DEVICE_NICKNAME] = pending["nickname"]
+                self._pending_entry = (_entry_title_from_data(data), data)
+                return self.async_show_progress_done(next_step_id="create_entry")
+            return self.async_show_progress_done(next_step_id="manual_show_error")
 
         if getattr(self, "_manual_validation_failed", False):
             self._manual_validation_failed = False
@@ -448,6 +509,29 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         return self.async_show_form(step_id="manual", data_schema=STEP_USER_SCHEMA)
+
+    async def async_step_manual_show_error(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show PIN error form after validation failed. Fixes spinner stuck when wrong PIN."""
+        if user_input is not None:
+            return await self.async_step_manual(user_input=user_input)
+        stored_result = self.context.pop("_manual_result", None)
+        stored_pending = self.context.pop("_manual_pending", None)
+        if stored_result is None or stored_pending is None:
+            return await self.async_step_manual()
+        err = "connection_timeout" if stored_result == "timeout" else ("no_pin_check" if stored_result == "no_pin_check" else "invalid_pin")
+        schema = vol.Schema({
+            vol.Required(CONF_DEVICE_NAME, default=stored_pending.get("device_name", DEFAULT_DEVICE_NAME)): str,
+            vol.Required(CONF_DEVICE_ADDRESS, default=stored_pending.get("addr", "")): str,
+            vol.Optional(CONF_DEVICE_NICKNAME, default=stored_pending.get("nickname", "")): str,
+            vol.Required(CONF_PIN, default=stored_pending.get("pin", DEFAULT_PIN)): str,
+        })
+        return self.async_show_form(
+            step_id="manual_show_error",
+            data_schema=schema,
+            errors={"base": err},
+        )
 
     @staticmethod
     @callback
