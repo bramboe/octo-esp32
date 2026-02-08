@@ -26,3 +26,23 @@ set_feet_position:
           min: 0
           max: 100
           step: 0.1
+
+set_pin:
+  name: Set PIN on device
+  description: "Set or change the PIN on the bed (e.g. after hard reset). Sends the set-PIN command (40 20 3c...) and saves the new PIN in the integration. Use when the device was reset and you need to set a PIN again."
+  fields:
+    pin:
+      name: PIN
+      description: New 4-digit PIN (e.g. 1987)
+      required: true
+      selector:
+        text:
+          pattern: "^[0-9]{4}$"
+          max: 4
+    device_id:
+      name: Device
+      description: Octo Bed device (optional if you have only one)
+      required: false
+      selector:
+        device:
+          integration: octo_bed
