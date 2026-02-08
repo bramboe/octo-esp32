@@ -17,10 +17,13 @@ _LOGGER = logging.getLogger(__name__)
 SERVICE_SET_HEAD_POSITION = "set_head_position"
 SERVICE_SET_FEET_POSITION = "set_feet_position"
 SERVICE_SET_PIN = "set_pin"
+SERVICE_SEND_SYSTEM_COMMAND = "send_system_command"
 
 ATTR_POSITION = "position"
 ATTR_PIN = "pin"
 ATTR_DEVICE_ID = "device_id"
+ATTR_COMMAND_FAMILY = "command_family"
+ATTR_OPCODE = "opcode"
 
 SET_POSITION_SCHEMA = vol.Schema(
     {
@@ -31,6 +34,14 @@ SET_POSITION_SCHEMA = vol.Schema(
 SET_PIN_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_PIN): vol.All(str, vol.Length(min=4, max=4), vol.Match(r"^\d{4}$")),
+        vol.Optional(ATTR_DEVICE_ID): str,
+    }
+)
+
+SEND_SYSTEM_COMMAND_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_COMMAND_FAMILY): vol.In(("short", "72")),
+        vol.Required(ATTR_OPCODE): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
         vol.Optional(ATTR_DEVICE_ID): str,
     }
 )
@@ -92,6 +103,24 @@ async def async_set_pin(hass: HomeAssistant, call: ServiceCall) -> None:
         _LOGGER.warning("Octo Bed: set_pin failed (device did not accept or not in range)")
 
 
+async def async_send_system_command(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Send a system command by family and opcode (for testing; check BLE status for response)."""
+    device_id = call.data.get(ATTR_DEVICE_ID)
+    if isinstance(device_id, dict):
+        device_id = device_id.get("device_id")
+    coordinator = _get_coordinator(hass, device_id)
+    if not coordinator:
+        _LOGGER.warning("Octo Bed: no device found for send_system_command (check device_id)")
+        return
+    family = call.data[ATTR_COMMAND_FAMILY]
+    opcode = int(call.data[ATTR_OPCODE]) & 0xFF
+    ok = await coordinator.async_send_system_command(family, opcode)
+    if ok:
+        _LOGGER.info("Octo Bed: sent system command %s opcode 0x%02X", family, opcode)
+    else:
+        _LOGGER.warning("Octo Bed: send_system_command failed (device not available)")
+
+
 def async_setup_services(hass: HomeAssistant) -> None:
     """Register Octo Bed services."""
     if hass.services.has_service(DOMAIN, SERVICE_SET_HEAD_POSITION):
@@ -113,6 +142,12 @@ def async_setup_services(hass: HomeAssistant) -> None:
         SERVICE_SET_PIN,
         async_set_pin,
         schema=SET_PIN_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEND_SYSTEM_COMMAND,
+        async_send_system_command,
+        schema=SEND_SYSTEM_COMMAND_SCHEMA,
     )
 
 
