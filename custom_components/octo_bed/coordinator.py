@@ -437,15 +437,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ok2 = await self._send_command(CMD_MAKE_DISCOVERABLE)
         return ok1 or ok2
 
-    async def async_send_device_reset(self) -> bool:
-        """Send make-discoverable command 10 times quickly (like pressing reset button 10x). May trigger device reset."""
-        any_ok = False
-        for _ in range(10):
-            if await self._send_command(CMD_MAKE_DISCOVERABLE):
-                any_ok = True
-            await asyncio.sleep(0.25)
-        return any_ok
-
     async def async_send_head_up(self) -> bool:
         return await self._send_command(CMD_HEAD_UP)
 
