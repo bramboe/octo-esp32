@@ -239,6 +239,32 @@ class OctoBedTryHardD2Button(OctoBedEntity, ButtonEntity):
         self.async_write_ha_state()
 
 
+class OctoBedHardResetScanStartButton(OctoBedEntity, ButtonEntity):
+    """Start sending ~50 candidate commands with 0.25s delay. Press Stop when you see the bed hard-reset."""
+
+    _attr_name = "Start hard reset scan"
+    _attr_unique_id = "hard_reset_scan_start"
+    _attr_icon = "mdi:play-circle"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    async def async_press(self) -> None:
+        self.coordinator.async_start_hard_reset_scan()
+        self.async_write_ha_state()
+
+
+class OctoBedHardResetScanStopButton(OctoBedEntity, ButtonEntity):
+    """Stop the hard-reset scan loop."""
+
+    _attr_name = "Stop hard reset scan"
+    _attr_unique_id = "hard_reset_scan_stop"
+    _attr_icon = "mdi:stop-circle"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    async def async_press(self) -> None:
+        self.coordinator.async_stop_hard_reset_scan()
+        self.async_write_ha_state()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -262,5 +288,7 @@ async def async_setup_entry(
         OctoBedTryHardB1Button(coordinator, entry),
         OctoBedTryHardD0Button(coordinator, entry),
         OctoBedTryHardD2Button(coordinator, entry),
+        OctoBedHardResetScanStartButton(coordinator, entry),
+        OctoBedHardResetScanStopButton(coordinator, entry),
         OctoBedResetBleButton(coordinator, entry),
     ])
