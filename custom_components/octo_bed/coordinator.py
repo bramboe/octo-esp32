@@ -141,6 +141,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_task: asyncio.Task[None] | None = None
         self._calibration_active = False
         self._calibration_stop_event: asyncio.Event | None = None
+        # Hard-reset scan: send many candidate commands with delay; stop button sets this
+        self._hard_reset_scan_task: asyncio.Task[None] | None = None
+        self._hard_reset_scan_stop: asyncio.Event | None = None
         # True only after we've sent keep-alive with PIN and device stayed connected (wrong PIN = disconnect)
         self._authenticated: bool = False
         # Last FFE1 notification that was not a PIN response (e.g. c0 21 status) – for diagnostics / future parsing
@@ -534,6 +537,58 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_send_try_hard_d2(self) -> bool:
         """Try hard-reset candidate (72 D2). Capture reply in BLE status sensor."""
         return await self._send_command_and_capture_notification(CMD_TRY_HARD_D2)
+
+    # Commands to cycle through in hard-reset scan (50 sends with delay; stop when you see reset)
+    _HARD_RESET_SCAN_COMMANDS = (
+        CMD_TRY_HARD_AF,
+        CMD_TRY_HARD_AD,
+        CMD_TRY_HARD_B3,
+        CMD_TRY_HARD_B1,
+        CMD_TRY_HARD_D0,
+        CMD_TRY_HARD_D2,
+        CMD_SOFT_RESET,
+    )
+    _HARD_RESET_SCAN_COUNT = 50
+    _HARD_RESET_SCAN_DELAY_SEC = 0.25
+
+    async def _run_hard_reset_scan(self) -> None:
+        """Send candidate commands in a loop; stop when _hard_reset_scan_stop is set."""
+        stop = self._hard_reset_scan_stop
+        commands = self._HARD_RESET_SCAN_COMMANDS
+        try:
+            for i in range(self._HARD_RESET_SCAN_COUNT):
+                if stop and stop.is_set():
+                    _LOGGER.debug("Hard reset scan stopped by user")
+                    break
+                cmd = commands[i % len(commands)]
+                await self._send_command(cmd)
+                await asyncio.sleep(self._HARD_RESET_SCAN_DELAY_SEC)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._hard_reset_scan_task = None
+
+    def async_start_hard_reset_scan(self) -> None:
+        """Start sending candidate commands in a loop (50 with delay). Use Stop hard reset scan to abort."""
+        if self._hard_reset_scan_task is not None and not self._hard_reset_scan_task.done():
+            return
+        self._hard_reset_scan_stop = asyncio.Event()
+        self._hard_reset_scan_stop.clear()
+        self._hard_reset_scan_task = self.hass.async_create_task(self._run_hard_reset_scan())
+        _LOGGER.info("Hard reset scan started (%s sends, %.1fs delay); press Stop when you see reset", self._HARD_RESET_SCAN_COUNT, self._HARD_RESET_SCAN_DELAY_SEC)
+
+    def async_stop_hard_reset_scan(self) -> None:
+        """Stop the hard-reset scan loop."""
+        if self._hard_reset_scan_stop:
+            self._hard_reset_scan_stop.set()
+        if self._hard_reset_scan_task is not None and not self._hard_reset_scan_task.done():
+            self._hard_reset_scan_task.cancel()
+        self._hard_reset_scan_task = None
+
+    @property
+    def hard_reset_scan_running(self) -> bool:
+        """True if the hard-reset scan loop is running."""
+        return self._hard_reset_scan_task is not None and not self._hard_reset_scan_task.done()
 
     async def async_set_pin_on_device(self, new_pin: str) -> bool:
         """Send first-time set-PIN command (40 20 3c...). Use after hard reset to set or change PIN on the device. Returns True if bed replied with 0x1A (accepted)."""
