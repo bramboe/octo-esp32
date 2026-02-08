@@ -28,6 +28,16 @@ from .const import (
     CMD_LIGHT_OFF,
     CMD_LIGHT_ON,
     CMD_MAKE_DISCOVERABLE,
+    CMD_SOFT_RESET,
+    CMD_TEST_70,
+    CMD_TEST_71,
+    CMD_TEST_7F,
+    CMD_TRY_HARD_AD,
+    CMD_TRY_HARD_AF,
+    CMD_TRY_HARD_B1,
+    CMD_TRY_HARD_B3,
+    CMD_TRY_HARD_D0,
+    CMD_TRY_HARD_D2,
     CMD_STOP,
     DEFAULT_FEET_CALIBRATION_SEC,
     DEFAULT_HEAD_CALIBRATION_SEC,
@@ -427,6 +437,53 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await client.disconnect()
         return False
 
+    async def _send_command_and_capture_notification(self, data: bytes, wait_s: float = 2.5) -> bool:
+        """Send command, enable notifications, wait for first response; store it in _last_device_notification_hex (see BLE status sensor)."""
+        ble_device = self._get_ble_device()
+        if not ble_device and self.device_address:
+            ble_device = await _wait_for_ble_device(self.hass, self.device_address)
+        if not ble_device:
+            return False
+        client = None
+        try:
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                self._device_name or "Octo Bed",
+                disconnected_callback=None,
+                timeout=CONNECT_TIMEOUT,
+            )
+            received: list[bytes] = []
+            notif_event = asyncio.Event()
+
+            def _on_notification(_char_handle: int, payload: bytearray) -> None:
+                received.append(bytes(payload))
+                notif_event.set()
+
+            await client.start_notify(BLE_CHAR_UUID, _on_notification)
+            try:
+                await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
+                try:
+                    await asyncio.wait_for(notif_event.wait(), timeout=wait_s)
+                except asyncio.TimeoutError:
+                    pass
+                if received:
+                    self._last_device_notification_hex = received[-1].hex()
+                else:
+                    self._last_device_notification_hex = ""
+            finally:
+                try:
+                    await client.stop_notify(BLE_CHAR_UUID)
+                except Exception:
+                    pass
+            return True
+        except Exception as e:
+            _LOGGER.debug("Send and capture failed: %s", e)
+            return False
+        finally:
+            if client:
+                await client.disconnect()
+
     async def async_send_stop(self) -> bool:
         """Send stop command."""
         return await self._send_command(CMD_STOP)
@@ -437,6 +494,102 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await asyncio.sleep(0.5)
         ok2 = await self._send_command(CMD_MAKE_DISCOVERABLE)
         return ok1 or ok2
+
+    async def async_send_soft_reset(self) -> bool:
+        """Send soft/low reset (40 20 ae 00 00 b2 40). Does not require re-adding the bed."""
+        return await self._send_command(CMD_SOFT_RESET)
+
+    async def async_send_test_7f(self) -> bool:
+        """Send test command 7f and capture reply. See BLE status sensor last_device_notification."""
+        return await self._send_command_and_capture_notification(CMD_TEST_7F)
+
+    async def async_send_test_70(self) -> bool:
+        """Send test command 70 and capture reply. See BLE status sensor last_device_notification."""
+        return await self._send_command_and_capture_notification(CMD_TEST_70)
+
+    async def async_send_test_71(self) -> bool:
+        """Send test command 71 and capture reply. See BLE status sensor last_device_notification."""
+        return await self._send_command_and_capture_notification(CMD_TEST_71)
+
+    async def async_send_try_hard_af(self) -> bool:
+        """Try hard-reset candidate (AE+1). Capture reply in BLE status sensor."""
+        return await self._send_command_and_capture_notification(CMD_TRY_HARD_AF)
+
+    async def async_send_try_hard_ad(self) -> bool:
+        """Try hard-reset candidate (AE-1). Capture reply in BLE status sensor."""
+        return await self._send_command_and_capture_notification(CMD_TRY_HARD_AD)
+
+    async def async_send_try_hard_b3(self) -> bool:
+        """Try hard-reset candidate (B2+1). Capture reply in BLE status sensor."""
+        return await self._send_command_and_capture_notification(CMD_TRY_HARD_B3)
+
+    async def async_send_try_hard_b1(self) -> bool:
+        """Try hard-reset candidate (B2-1). Capture reply in BLE status sensor."""
+        return await self._send_command_and_capture_notification(CMD_TRY_HARD_B1)
+
+    async def async_send_try_hard_d0(self) -> bool:
+        """Try hard-reset candidate (72 D0). Capture reply in BLE status sensor."""
+        return await self._send_command_and_capture_notification(CMD_TRY_HARD_D0)
+
+    async def async_send_try_hard_d2(self) -> bool:
+        """Try hard-reset candidate (72 D2). Capture reply in BLE status sensor."""
+        return await self._send_command_and_capture_notification(CMD_TRY_HARD_D2)
+
+    async def async_set_pin_on_device(self, new_pin: str) -> bool:
+        """Send first-time set-PIN command (40 20 3c...). Use after hard reset to set or change PIN on the device. Returns True if bed replied with 0x1A (accepted)."""
+        addr = self.device_address
+        if not addr or not self._address_present(addr):
+            return False
+        ble_device = self._get_ble_device()
+        if not ble_device:
+            ble_device = await _wait_for_ble_device(self.hass, addr)
+        if not ble_device:
+            return False
+        client = None
+        try:
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                self._device_name or "Octo Bed",
+                disconnected_callback=None,
+                timeout=CONNECT_TIMEOUT,
+            )
+            set_pin_cmd = _make_set_pin(new_pin)
+            received: list[bytes] = []
+            notif_event = asyncio.Event()
+
+            def _on_notification(_char_handle: int, data: bytearray) -> None:
+                received.append(bytes(data))
+                notif_event.set()
+
+            try:
+                await client.start_notify(BLE_CHAR_UUID, _on_notification)
+            except Exception as e:
+                _LOGGER.debug("Set PIN: could not start notifications: %s", e)
+                return False
+            try:
+                await client.write_gatt_char(BLE_CHAR_UUID, set_pin_cmd, response=True)
+            except Exception:
+                try:
+                    await client.write_gatt_char(BLE_CHAR_UUID, set_pin_cmd, response=False)
+                except Exception:
+                    return False
+            try:
+                await asyncio.wait_for(notif_event.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                pass
+            # Bed sends 40 21 3c... then 40 21 43 00 01 1a 01 40 (accepted)
+            for data in received:
+                if _parse_pin_response(data) is True:
+                    _LOGGER.info("Set PIN on device: bed accepted new PIN")
+                    return True
+            return False
+        except Exception as e:
+            _LOGGER.warning("Set PIN on device failed: %s", e)
+            return False
+        finally:
+            if client:
+                await client.disconnect()
 
     async def async_send_head_up(self) -> bool:
         return await self._send_command(CMD_HEAD_UP)
