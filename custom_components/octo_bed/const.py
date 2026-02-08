@@ -46,10 +46,11 @@ CMD_LIGHT_OFF_PERMANENT = bytes(
 KEEP_ALIVE_PREFIX = bytes([0x40, 0x20, 0x43, 0x00, 0x04, 0x00])
 KEEP_ALIVE_SUFFIX = bytes([0x40])
 
-# Bed response on FFE1 after keep-alive: 40 21 43 00 01 XX ... (XX = status)
-PIN_RESPONSE_ACCEPTED = 0x1A  # correct PIN
-PIN_RESPONSE_REJECTED = 0x18  # wrong PIN
-PIN_RESPONSE_STATUS_BYTE_INDEX = 5  # byte index in notification (after 40 21 43 00 01)
+# Bed response on FFE1 after keep-alive: 40 21 ... or 46 21 ... (XX = status)
+PIN_RESPONSE_ACCEPTED = 0x1A   # correct PIN
+PIN_RESPONSE_REJECTED = 0x18   # wrong PIN
+PIN_RESPONSE_REJECTED_ALT = 0x00  # some beds send 46 21 43 80 01 36 00 for wrong PIN
+PIN_RESPONSE_STATUS_BYTE_INDEX = 5
 
 # Connection timeout
 CONNECT_TIMEOUT = 15.0
