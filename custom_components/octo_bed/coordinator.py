@@ -282,16 +282,17 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except Exception:
                         return False
                 try:
-                    await asyncio.wait_for(notif_event.wait(), timeout=3.0)
+                    await asyncio.wait_for(notif_event.wait(), timeout=1.5)
                 except asyncio.TimeoutError:
                     pass
-                if received:
-                    parsed = _parse_pin_response(received[-1])
-                    if parsed is True:
-                        return True
+                # Check all notifications: rejection (0x18) is instant failure; accept (0x1A) is success
+                for data in received:
+                    parsed = _parse_pin_response(data)
                     if parsed is False:
                         _LOGGER.debug("Bed reported PIN rejected (0x18)")
                         return False
+                    if parsed is True:
+                        return True
             finally:
                 try:
                     await client.stop_notify(BLE_CHAR_UUID)
@@ -299,7 +300,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     pass
 
             # Fallback: no notification or unknown format – wait and see if device disconnects
-            await asyncio.sleep(5.0)
+            await asyncio.sleep(2.0)
             if not client.is_connected:
                 _LOGGER.debug("Device disconnected after keep-alive (wrong PIN or not bed base)")
                 return False
@@ -817,7 +818,7 @@ async def probe_device_validates_pin(
     address: str,
     device_name: str,
 ) -> bool:
-    """Send keep-alive with a wrong PIN. Return True if device disconnects (it validates PIN), False if it stays connected (cannot verify PIN on this device)."""
+    """Send keep-alive with a wrong PIN. Return True if device validates PIN (sends 0x18 or disconnects), False otherwise."""
     addr = address and address.strip()
     if not addr:
         return False
@@ -834,20 +835,46 @@ async def probe_device_validates_pin(
             timeout=CONNECT_TIMEOUT,
         )
         keep_alive = _make_keep_alive(_PROBE_WRONG_PIN)
+        received: list[bytes] = []
+        notif_event = asyncio.Event()
+
+        def _on_notification(_char_handle: int, data: bytearray) -> None:
+            received.append(bytes(data))
+            notif_event.set()
+
         try:
-            await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
-        except Exception:
+            await client.start_notify(BLE_CHAR_UUID, _on_notification)
+        except Exception as e:
+            _LOGGER.debug("Probe: could not start notifications: %s", e)
+        try:
             try:
-                await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+                await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
             except Exception:
-                return False
-        await asyncio.sleep(5.0)
-        # If still connected after wrong PIN, this device does not validate PIN at BLE level (e.g. RC2 remote)
-        if client.is_connected:
-            _LOGGER.info("Probe: device stayed connected after wrong PIN (does not support PIN verification)")
-            return False
-        _LOGGER.debug("Probe: device disconnected after wrong PIN (supports PIN verification)")
-        return True
+                try:
+                    await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+                except Exception:
+                    return False
+            try:
+                await asyncio.wait_for(notif_event.wait(), timeout=1.5)
+            except asyncio.TimeoutError:
+                pass
+            # If bed sends 0x18 (rejected), it validates PIN – return immediately
+            for data in received:
+                if _parse_pin_response(data) is False:
+                    _LOGGER.debug("Probe: bed reported PIN rejected (0x18) – device validates PIN")
+                    return True
+        finally:
+            try:
+                await client.stop_notify(BLE_CHAR_UUID)
+            except Exception:
+                pass
+        # No rejection notification – wait briefly to see if device disconnects
+        await asyncio.sleep(2.0)
+        if not client.is_connected:
+            _LOGGER.debug("Probe: device disconnected after wrong PIN (supports PIN verification)")
+            return True
+        _LOGGER.info("Probe: device stayed connected after wrong PIN (does not support PIN verification)")
+        return False
     except Exception as e:
         _LOGGER.debug("Probe failed: %s", e)
         return False
@@ -927,16 +954,17 @@ async def validate_pin(
                 _LOGGER.warning("PIN validation: keep-alive write failed for %s", addr)
                 return False
             try:
-                await asyncio.wait_for(notif_event.wait(), timeout=3.0)
+                await asyncio.wait_for(notif_event.wait(), timeout=1.5)
             except asyncio.TimeoutError:
                 pass
-            if received:
-                parsed = _parse_pin_response(received[-1])
-                if parsed is True:
-                    return True
+            # Check all notifications: rejection (0x18) is instant failure
+            for data in received:
+                parsed = _parse_pin_response(data)
                 if parsed is False:
                     _LOGGER.info("PIN validation: bed reported PIN rejected (0x18)")
                     return False
+                if parsed is True:
+                    return True
         finally:
             try:
                 await client.stop_notify(BLE_CHAR_UUID)
@@ -944,7 +972,7 @@ async def validate_pin(
                 pass
 
         # Fallback: no notification or unknown – wait for disconnect then try CMD_STOP
-        await asyncio.sleep(5.0)
+        await asyncio.sleep(2.0)
         if not client.is_connected:
             _LOGGER.info("PIN validation: device disconnected after keep-alive (wrong PIN)")
             return False
@@ -953,7 +981,7 @@ async def validate_pin(
         except Exception as e:
             _LOGGER.info("PIN validation: CMD_STOP failed: %s", e)
             return False
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.5)
         if not client.is_connected:
             _LOGGER.info("PIN validation: device disconnected after CMD_STOP (wrong PIN)")
             return False
