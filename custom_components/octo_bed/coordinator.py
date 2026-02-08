@@ -283,14 +283,14 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except Exception:
                         return False
                 try:
-                    await asyncio.wait_for(notif_event.wait(), timeout=1.5)
+                    await asyncio.wait_for(notif_event.wait(), timeout=2.5)
                 except asyncio.TimeoutError:
                     pass
-                # Check all notifications: rejection (0x18) is instant failure; accept (0x1A) is success
+                # Check all notifications: rejection (0x18/0x1b) is instant failure; accept (0x1A) is success
                 for data in received:
                     parsed = _parse_pin_response(data)
                     if parsed is False:
-                        _LOGGER.debug("Bed reported PIN rejected (0x18)")
+                        _LOGGER.debug("Bed reported PIN rejected")
                         return False
                     if parsed is True:
                         return True
@@ -300,12 +300,12 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except Exception:
                     pass
 
-            # Fallback: no notification or unknown format – wait and see if device disconnects
+            # Fallback: only accept on explicit 0x1A; otherwise disconnected or no clear accept = not authenticated
             await asyncio.sleep(2.0)
             if not client.is_connected:
                 _LOGGER.debug("Device disconnected after keep-alive (wrong PIN or not bed base)")
                 return False
-            return True
+            return False
         except Exception as e:
             _LOGGER.debug("PIN check failed: %s", e)
             return False
@@ -331,7 +331,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if addr:
             if self._address_present(addr):
                 return
-            _LOGGER.warning("Configured address %s not seen by any Bluetooth adapter", addr)
+            _LOGGER.debug("Configured address %s not seen by any Bluetooth adapter", addr)
         # Discover by name (check both connectable and non-connectable, e.g. proxy)
         infos_conn = bluetooth.async_discovered_service_info(self.hass, connectable=True)
         infos_any = bluetooth.async_discovered_service_info(self.hass, connectable=False)
@@ -946,14 +946,14 @@ async def validate_pin(
                 _LOGGER.warning("PIN validation: keep-alive write failed for %s", addr)
                 return False
             try:
-                await asyncio.wait_for(notif_event.wait(), timeout=1.5)
+                await asyncio.wait_for(notif_event.wait(), timeout=2.5)
             except asyncio.TimeoutError:
                 pass
-            # Check all notifications: rejection (0x18) is instant failure
+            # Check all notifications: rejection (0x18/0x1b) is instant failure; accept (0x1A) is success
             for data in received:
                 parsed = _parse_pin_response(data)
                 if parsed is False:
-                    _LOGGER.info("PIN validation: bed reported PIN rejected (0x18)")
+                    _LOGGER.info("PIN validation: bed reported PIN rejected")
                     return False
                 if parsed is True:
                     return True
@@ -963,21 +963,26 @@ async def validate_pin(
             except Exception:
                 pass
 
-        # Fallback: no notification or unknown – wait for disconnect then try CMD_STOP
-        await asyncio.sleep(2.0)
+        # Fallback: no clear accept (0x1A) – do not accept. Beds that send 0x1b for wrong PIN may stay connected.
+        await asyncio.sleep(1.5)
+        # Re-check in case notification arrived during sleep
+        for data in received:
+            parsed = _parse_pin_response(data)
+            if parsed is False:
+                return False
+            if parsed is True:
+                return True
+        await asyncio.sleep(1.0)
         if not client.is_connected:
             _LOGGER.info("PIN validation: device disconnected after keep-alive (wrong PIN)")
             return False
         try:
             await client.write_gatt_char(BLE_CHAR_UUID, CMD_STOP, response=False)
         except Exception as e:
-            _LOGGER.info("PIN validation: CMD_STOP failed: %s", e)
-            return False
+            _LOGGER.debug("PIN validation: CMD_STOP failed: %s", e)
         await asyncio.sleep(0.5)
-        if not client.is_connected:
-            _LOGGER.info("PIN validation: device disconnected after CMD_STOP (wrong PIN)")
-            return False
-        return True
+        # Only accept when we got explicit 0x1A; otherwise reject (avoids adding device on wrong PIN)
+        return False
     except Exception as e:
         _LOGGER.warning("PIN validation failed for %s: %s", addr, e)
         return False
