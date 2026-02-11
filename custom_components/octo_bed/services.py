@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_PIN, DOMAIN
-from .coordinator import OctoBedCoordinator
+from .coordinator import OctoBedCoordinator, normalize_pin
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ async def async_set_pin(hass: HomeAssistant, call: ServiceCall) -> None:
     if not coordinator:
         _LOGGER.warning("Octo Bed: no device found for set_pin (check device_id)")
         return
-    pin = call.data[ATTR_PIN].strip()[:4].ljust(4, "0")
+    pin = normalize_pin(call.data[ATTR_PIN])
     ok = await coordinator.async_set_pin_on_device(pin)
     if ok:
         new_data = {**coordinator._entry.data, CONF_PIN: pin}
