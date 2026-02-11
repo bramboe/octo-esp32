@@ -37,8 +37,6 @@ set_pin:
       required: true
       selector:
         text:
-          pattern: "^[0-9]{4}$"
-          max: 4
     device_id:
       name: Device
       description: Octo Bed device (optional if you have only one)
