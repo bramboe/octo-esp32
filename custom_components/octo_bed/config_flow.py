@@ -26,7 +26,7 @@ from .const import (
     DEFAULT_PIN,
     DOMAIN,
 )
-from .coordinator import validate_pin_with_probe
+from .coordinator import normalize_pin, validate_pin_with_probe
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -227,7 +227,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 address = self.unique_id
             if not address:
                 return await self.async_step_manual()
-            pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+            pin = normalize_pin(user_input.get(CONF_PIN) or DEFAULT_PIN)
             nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
             self._confirm_pending = {"name": name or "Octo Bed", "address": address, "pin": pin, "nickname": nickname}
             self._confirm_validate_task = self.hass.async_create_task(
@@ -266,7 +266,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             retry = self.context.pop("_confirm_retry_pending", None)
             if retry:
-                pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+                pin = normalize_pin(user_input.get(CONF_PIN) or DEFAULT_PIN)
                 nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
                 name = retry.get("name", "Octo Bed")
                 address = retry.get("address", "")
@@ -499,7 +499,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             device_name = (user_input.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
             raw_mac = (user_input.get(CONF_DEVICE_ADDRESS) or "").strip()
-            pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+            pin = normalize_pin(user_input.get(CONF_PIN) or DEFAULT_PIN)
 
             normalized_mac = _normalize_mac(raw_mac)
             if not raw_mac:
@@ -535,7 +535,7 @@ class OctoBedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             device_name = (user_input.get(CONF_DEVICE_NAME) or DEFAULT_DEVICE_NAME).strip()
             raw_mac = (user_input.get(CONF_DEVICE_ADDRESS) or "").strip()
-            pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+            pin = normalize_pin(user_input.get(CONF_PIN) or DEFAULT_PIN)
             nickname = (user_input.get(CONF_DEVICE_NICKNAME) or "").strip()
             normalized_mac = _normalize_mac(raw_mac)
             if not raw_mac or len(normalized_mac) != 12:
@@ -604,7 +604,7 @@ class OctoBedOptionsFlow(config_entries.OptionsFlow):
             head_sec = max(1.0, min(120.0, float(user_input.get(CONF_HEAD_CALIBRATION_SEC, 30))))
             feet_sec = max(1.0, min(120.0, float(user_input.get(CONF_FEET_CALIBRATION_SEC, 30))))
             raw_mac = (user_input.get(CONF_DEVICE_ADDRESS) or "").strip()
-            pin = (user_input.get(CONF_PIN) or DEFAULT_PIN).strip()[:4].ljust(4, "0")
+            pin = normalize_pin(user_input.get(CONF_PIN) or DEFAULT_PIN)
             normalized_mac = _normalize_mac(raw_mac)
             if raw_mac and len(normalized_mac) != 12:
                 return self.async_show_form(
