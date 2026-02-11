@@ -49,24 +49,34 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _normalize_pin_str(pin: str) -> str:
+    """Normalize PIN to exactly 4 digit characters. Non-digits are skipped; result is left-padded with '0'."""
+    raw = (pin or "0000").strip()
+    digits_only = "".join(c for c in raw if c in "0123456789")[:4]
+    return digits_only.ljust(4, "0")
+
+
+def normalize_pin(pin: str) -> str:
+    """Normalize PIN to exactly 4 digits. Use when saving to config entry or sending to device."""
+    return _normalize_pin_str(pin)
+
+
+def _pin_to_digits(pin: str) -> bytes:
+    """Convert PIN string to exactly 4 bytes (0-9). Non-digits become 0 so the bed never gets invalid bytes."""
+    s = _normalize_pin_str(pin)
+    return bytes(
+        ord(c) - ord("0") if c in "0123456789" else 0 for c in s
+    )
+
+
 def _make_keep_alive(pin: str) -> bytes:
     """Build keep-alive packet with 4-digit PIN."""
-    pin = (pin or "0000").strip()
-    while len(pin) < 4:
-        pin = "0" + pin
-    pin = pin[:4]
-    digits = bytes([ord(c) - ord("0") for c in pin])
-    return KEEP_ALIVE_PREFIX + digits + KEEP_ALIVE_SUFFIX
+    return KEEP_ALIVE_PREFIX + _pin_to_digits(pin) + KEEP_ALIVE_SUFFIX
 
 
 def _make_set_pin(pin: str) -> bytes:
     """Build first-time set-PIN packet (40 20 3c 04 00 04 02 01 + digits + 40). Bed replies with two notifications; second is 40 21 43 ... 1a (accepted)."""
-    pin = (pin or "0000").strip()
-    while len(pin) < 4:
-        pin = "0" + pin
-    pin = pin[:4]
-    digits = bytes([ord(c) - ord("0") for c in pin])
-    return SET_PIN_PREFIX + digits + KEEP_ALIVE_SUFFIX
+    return SET_PIN_PREFIX + _pin_to_digits(pin) + KEEP_ALIVE_SUFFIX
 
 
 def _parse_pin_response(data: bytes) -> bool | None:
@@ -114,7 +124,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _addr = entry.data.get(CONF_DEVICE_ADDRESS)
         self._device_address: str | None = (_addr and _addr.strip()) or None
         self._device_name = entry.data.get("device_name", "RC2")
-        self._pin = entry.data.get("pin", "0000")
+        self._pin = _normalize_pin_str(entry.data.get("pin", "0000"))
         head_sec = entry.options.get("head_calibration_seconds", entry.data.get("head_calibration_seconds", DEFAULT_HEAD_CALIBRATION_SEC))
         feet_sec = entry.options.get("feet_calibration_seconds", entry.data.get("feet_calibration_seconds", DEFAULT_FEET_CALIBRATION_SEC))
         self._head_calibration_ms = int(float(head_sec) * 1000)
@@ -157,7 +167,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def pin(self) -> str:
-        return self._entry.data.get("pin", self._pin)
+        return _normalize_pin_str(self._entry.data.get("pin", self._pin))
 
     @property
     def head_position(self) -> float:
@@ -1107,7 +1117,7 @@ async def validate_pin(
     pin: str,
 ) -> bool:
     """Connect, send keep-alive with PIN. Use bed notification (0x1A=accepted, 0x18=rejected) when present, else wait and CMD_STOP."""
-    pin = (pin or "0000").strip()[:4].ljust(4, "0")
+    pin = _normalize_pin_str(pin)
     addr = address and address.strip()
     if not addr:
         return False
