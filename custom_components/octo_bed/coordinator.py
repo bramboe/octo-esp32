@@ -17,6 +17,7 @@ from .const import (
     BLE_CHAR_HANDLE,
     BLE_CHAR_UUID,
     CONF_DEVICE_ADDRESS,
+    DELAY_AFTER_STOP_SEC,
     DOMAIN,
     CONF_DEVICE_NICKNAME,
     CONNECT_TIMEOUT,
@@ -537,8 +538,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await client.disconnect()
 
     async def async_send_stop(self) -> bool:
-        """Send stop command."""
-        return await self._send_command(CMD_STOP)
+        """Send stop command twice (ESPHome pattern for reliability)."""
+        ok1 = await self._send_command(CMD_STOP)
+        await asyncio.sleep(0.1)
+        ok2 = await self._send_command(CMD_STOP)
+        return ok1 or ok2
 
     async def async_send_make_discoverable(self) -> bool:
         """Send make-discoverable command twice (like pressing hub button 2× = teach remote)."""
@@ -734,6 +738,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await client.write_gatt_char(char_spec, command, response=False)
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
             await client.write_gatt_char(char_spec, CMD_STOP, response=False)
+            await asyncio.sleep(0.1)
+            await client.write_gatt_char(char_spec, CMD_STOP, response=False)
         except asyncio.CancelledError:
             await self._send_command(CMD_STOP)
             raise
@@ -756,6 +762,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ble_device = self._get_ble_device()
         if not ble_device:
             return False
+        await self.async_send_stop()
+        await asyncio.sleep(DELAY_AFTER_STOP_SEC)
         self.set_movement_active(True)
         client = None
         try:
@@ -771,6 +779,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             while self.hass.loop.time() < end_ts:
                 await client.write_gatt_char(char_spec, command, response=False)
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+            await client.write_gatt_char(char_spec, CMD_STOP, response=False)
+            await asyncio.sleep(0.1)
             await client.write_gatt_char(char_spec, CMD_STOP, response=False)
             return True
         except Exception as e:
@@ -886,6 +896,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             while not stop_event.is_set():
                 await client.write_gatt_char(char_spec, command, response=False)
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+            await client.write_gatt_char(char_spec, CMD_STOP, response=False)
+            await asyncio.sleep(0.1)
             await client.write_gatt_char(char_spec, CMD_STOP, response=False)
         except asyncio.CancelledError:
             if client:
