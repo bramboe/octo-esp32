@@ -135,22 +135,10 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
             return
         duration_ms = int((diff / 100.0) * cal_ms)
         duration_ms = max(300, min(cal_ms, duration_ms))
-        coordinator.set_movement_active(True)
-        loop = asyncio.get_running_loop()
-        end_ts = loop.time() + duration_ms / 1000.0
-        try:
-            if target > current:
-                while loop.time() < end_ts:
-                    await coordinator.async_send_feet_up()
-                    await asyncio.sleep(0.3)
-            else:
-                while loop.time() < end_ts:
-                    await coordinator.async_send_feet_down()
-                    await asyncio.sleep(0.3)
-        finally:
-            await coordinator.async_send_stop()
+        duration_sec = duration_ms / 1000.0
+        command = CMD_FEET_UP if target > current else CMD_FEET_DOWN
+        await coordinator.async_run_movement_for_duration(command, duration_sec)
         coordinator.set_feet_position(target)
-        coordinator.set_movement_active(False)
         self.async_write_ha_state()
 
 
