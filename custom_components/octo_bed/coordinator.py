@@ -645,7 +645,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._device_name or "Octo Bed",
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
-                max_attempts=1,
+                max_attempts=2,
             )
             set_pin_cmd = _make_set_pin(new_pin)
             received: list[bytes] = []
@@ -1073,7 +1073,7 @@ async def probe_device_validates_pin(
             device_name or "Octo Bed",
             disconnected_callback=None,
             timeout=CONNECT_TIMEOUT,
-            max_attempts=1,
+            max_attempts=2,
         )
         char_spec = await _find_char_specifier(client)
         keep_alive = _make_keep_alive(_PROBE_WRONG_PIN)
@@ -1168,7 +1168,7 @@ async def validate_pin(
             device_name or "Octo Bed",
             disconnected_callback=None,
             timeout=CONNECT_TIMEOUT,
-            max_attempts=1,
+            max_attempts=2,
         )
         char_spec = await _find_char_specifier(client)
         keep_alive = _make_keep_alive(pin)
