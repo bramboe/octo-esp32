@@ -1132,12 +1132,12 @@ async def validate_pin_with_probe(
     pin: str,
 ) -> str:
     """Validate user's PIN first (fast path). If it fails, probe to distinguish wrong_pin vs no_pin_check.
-    Returns: 'ok' (PIN accepted), 'wrong_pin', 'no_pin_check', or 'connection_failed'."""
+    Returns: 'ok' (PIN accepted), 'wrong_pin', 'no_pin_check', 'device_not_found', or 'connection_failed'."""
     result = await validate_pin(hass, address, device_name, pin)
     if result == "ok":
         return "ok"
-    if result == "connection_failed":
-        return "connection_failed"
+    if result in ("device_not_found", "connection_failed"):
+        return result
     # User PIN failed: probe to distinguish wrong_pin vs no_pin_check (RC2)
     probe_validates = await probe_device_validates_pin(hass, address, device_name)
     if probe_validates:
@@ -1151,7 +1151,7 @@ async def validate_pin(
     device_name: str,
     pin: str,
 ) -> str:
-    """Connect, send keep-alive with PIN. Returns 'ok', 'wrong_pin', or 'connection_failed'."""
+    """Connect, send keep-alive with PIN. Returns 'ok', 'wrong_pin', 'device_not_found', or 'connection_failed'."""
     pin = _normalize_pin_str(pin)
     addr = address and address.strip()
     if not addr:
@@ -1159,7 +1159,7 @@ async def validate_pin(
     ble_device = await _wait_for_ble_device(hass, addr)
     if not ble_device:
         _LOGGER.warning("PIN validation: no BLE device for %s (not seen by scanner within %ss)", addr, _WAIT_FOR_DEVICE_SEC)
-        return "connection_failed"
+        return "device_not_found"
     client = None
     try:
         client = await establish_connection(
