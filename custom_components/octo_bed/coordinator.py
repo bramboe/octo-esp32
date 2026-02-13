@@ -1168,7 +1168,8 @@ async def validate_pin(
             device_name or "Octo Bed",
             disconnected_callback=None,
             timeout=CONNECT_TIMEOUT,
-            max_attempts=2,
+            max_attempts=4,
+            use_services_cache=False,
         )
         char_spec = await _find_char_specifier(client)
         keep_alive = _make_keep_alive(pin)
