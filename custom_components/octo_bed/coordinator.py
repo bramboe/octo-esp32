@@ -1040,6 +1040,7 @@ async def probe_device_validates_pin(
             device_name or "Octo Bed",
             disconnected_callback=None,
             timeout=CONNECT_TIMEOUT,
+            max_attempts=1,
         )
         keep_alive = _make_keep_alive(_PROBE_WRONG_PIN)
         received: list[bytes] = []
@@ -1096,17 +1097,16 @@ async def validate_pin_with_probe(
     device_name: str,
     pin: str,
 ) -> str:
-    """Probe whether device disconnects on wrong PIN; then validate user's PIN.
+    """Validate user's PIN first (fast path). If it fails, probe to distinguish wrong_pin vs no_pin_check.
     Returns: 'ok' (PIN accepted), 'wrong_pin', or 'no_pin_check' (device does not
     disconnect on wrong PIN and user PIN did not work - e.g. RC2 remote)."""
-    probe_validates = await probe_device_validates_pin(hass, address, device_name)
     user_ok = await validate_pin(hass, address, device_name, pin)
     if user_ok:
         return "ok"
-    # User PIN failed: if device disconnects on wrong PIN we know it was wrong_pin
+    # User PIN failed: probe to distinguish wrong_pin vs no_pin_check (RC2)
+    probe_validates = await probe_device_validates_pin(hass, address, device_name)
     if probe_validates:
         return "wrong_pin"
-    # Device does not disconnect on wrong PIN and user PIN didn't work → likely RC2
     return "no_pin_check"
 
 
@@ -1133,6 +1133,7 @@ async def validate_pin(
             device_name or "Octo Bed",
             disconnected_callback=None,
             timeout=CONNECT_TIMEOUT,
+            max_attempts=1,
         )
         keep_alive = _make_keep_alive(pin)
         received: list[bytes] = []
