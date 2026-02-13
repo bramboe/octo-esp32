@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
-    BLE_CHAR_UUID,
+    BLE_CHAR_HANDLE,
     CONF_DEVICE_ADDRESS,
     DOMAIN,
     CONF_DEVICE_NICKNAME,
@@ -293,15 +293,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 notif_event.set()
 
             try:
-                await client.start_notify(BLE_CHAR_UUID, _on_notification)
+                await client.start_notify(BLE_CHAR_HANDLE, _on_notification)
             except Exception as e:
                 _LOGGER.debug("Could not start notifications for PIN response: %s", e)
             try:
                 try:
-                    await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
+                    await client.write_gatt_char(BLE_CHAR_HANDLE, keep_alive, response=True)
                 except Exception:
                     try:
-                        await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+                        await client.write_gatt_char(BLE_CHAR_HANDLE, keep_alive, response=False)
                     except Exception:
                         return False
                 try:
@@ -318,7 +318,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         return True
             finally:
                 try:
-                    await client.stop_notify(BLE_CHAR_UUID)
+                    await client.stop_notify(BLE_CHAR_HANDLE)
                 except Exception:
                     pass
 
@@ -435,7 +435,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     disconnected_callback=None,
                     timeout=CONNECT_TIMEOUT,
                 )
-                await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
+                await client.write_gatt_char(BLE_CHAR_HANDLE, data, response=False)
                 return True
             except Exception as e:
                 last_error = e
@@ -472,9 +472,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 received.append(bytes(payload))
                 notif_event.set()
 
-            await client.start_notify(BLE_CHAR_UUID, _on_notification)
+            await client.start_notify(BLE_CHAR_HANDLE, _on_notification)
             try:
-                await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
+                await client.write_gatt_char(BLE_CHAR_HANDLE, data, response=False)
                 try:
                     await asyncio.wait_for(notif_event.wait(), timeout=wait_s)
                 except asyncio.TimeoutError:
@@ -485,7 +485,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._last_device_notification_hex = ""
             finally:
                 try:
-                    await client.stop_notify(BLE_CHAR_UUID)
+                    await client.stop_notify(BLE_CHAR_HANDLE)
                 except Exception:
                     pass
             return True
@@ -615,15 +615,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 notif_event.set()
 
             try:
-                await client.start_notify(BLE_CHAR_UUID, _on_notification)
+                await client.start_notify(BLE_CHAR_HANDLE, _on_notification)
             except Exception as e:
                 _LOGGER.debug("Set PIN: could not start notifications: %s", e)
                 return False
             try:
-                await client.write_gatt_char(BLE_CHAR_UUID, set_pin_cmd, response=True)
+                await client.write_gatt_char(BLE_CHAR_HANDLE, set_pin_cmd, response=True)
             except Exception:
                 try:
-                    await client.write_gatt_char(BLE_CHAR_UUID, set_pin_cmd, response=False)
+                    await client.write_gatt_char(BLE_CHAR_HANDLE, set_pin_cmd, response=False)
                 except Exception:
                     return False
             try:
@@ -689,11 +689,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             while not is_cancelled():
                 await client.write_gatt_char(
-                    BLE_CHAR_UUID, command, response=False
+                    BLE_CHAR_HANDLE, command, response=False
                 )
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
             await client.write_gatt_char(
-                BLE_CHAR_UUID, CMD_STOP, response=False
+                BLE_CHAR_HANDLE, CMD_STOP, response=False
             )
         except asyncio.CancelledError:
             await self._send_command(CMD_STOP)
@@ -730,11 +730,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             end_ts = self.hass.loop.time() + duration_sec
             while self.hass.loop.time() < end_ts:
                 await client.write_gatt_char(
-                    BLE_CHAR_UUID, command, response=False
+                    BLE_CHAR_HANDLE, command, response=False
                 )
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
             await client.write_gatt_char(
-                BLE_CHAR_UUID, CMD_STOP, response=False
+                BLE_CHAR_HANDLE, CMD_STOP, response=False
             )
             return True
         except Exception as e:
@@ -848,17 +848,17 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             while not stop_event.is_set():
                 await client.write_gatt_char(
-                    BLE_CHAR_UUID, command, response=False
+                    BLE_CHAR_HANDLE, command, response=False
                 )
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
             await client.write_gatt_char(
-                BLE_CHAR_UUID, CMD_STOP, response=False
+                BLE_CHAR_HANDLE, CMD_STOP, response=False
             )
         except asyncio.CancelledError:
             if client:
                 try:
                     await client.write_gatt_char(
-                        BLE_CHAR_UUID, CMD_STOP, response=False
+                        BLE_CHAR_HANDLE, CMD_STOP, response=False
                     )
                 except Exception:
                     pass
@@ -1050,15 +1050,15 @@ async def probe_device_validates_pin(
             notif_event.set()
 
         try:
-            await client.start_notify(BLE_CHAR_UUID, _on_notification)
+            await client.start_notify(BLE_CHAR_HANDLE, _on_notification)
         except Exception as e:
             _LOGGER.debug("Probe: could not start notifications: %s", e)
         try:
             try:
-                await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
+                await client.write_gatt_char(BLE_CHAR_HANDLE, keep_alive, response=True)
             except Exception:
                 try:
-                    await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+                    await client.write_gatt_char(BLE_CHAR_HANDLE, keep_alive, response=False)
                 except Exception:
                     return False
             try:
@@ -1072,7 +1072,7 @@ async def probe_device_validates_pin(
                     return True
         finally:
             try:
-                await client.stop_notify(BLE_CHAR_UUID)
+                await client.stop_notify(BLE_CHAR_HANDLE)
             except Exception:
                 pass
         # No rejection notification – wait briefly to see if device disconnects
@@ -1143,17 +1143,17 @@ async def validate_pin(
             notif_event.set()
 
         try:
-            await client.start_notify(BLE_CHAR_UUID, _on_notification)
+            await client.start_notify(BLE_CHAR_HANDLE, _on_notification)
         except Exception as e:
             _LOGGER.debug("PIN validation: could not start notifications: %s", e)
         try:
             write_ok = False
             try:
-                await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=True)
+                await client.write_gatt_char(BLE_CHAR_HANDLE, keep_alive, response=True)
                 write_ok = True
             except Exception:
                 try:
-                    await client.write_gatt_char(BLE_CHAR_UUID, keep_alive, response=False)
+                    await client.write_gatt_char(BLE_CHAR_HANDLE, keep_alive, response=False)
                     write_ok = True
                 except Exception:
                     pass
@@ -1174,7 +1174,7 @@ async def validate_pin(
                     return True
         finally:
             try:
-                await client.stop_notify(BLE_CHAR_UUID)
+                await client.stop_notify(BLE_CHAR_HANDLE)
             except Exception:
                 pass
 
@@ -1192,7 +1192,7 @@ async def validate_pin(
             _LOGGER.info("PIN validation: device disconnected after keep-alive (wrong PIN)")
             return False
         try:
-            await client.write_gatt_char(BLE_CHAR_UUID, CMD_STOP, response=False)
+            await client.write_gatt_char(BLE_CHAR_HANDLE, CMD_STOP, response=False)
         except Exception as e:
             _LOGGER.debug("PIN validation: CMD_STOP failed: %s", e)
         await asyncio.sleep(0.5)
@@ -1231,7 +1231,7 @@ async def send_single_command(
             disconnected_callback=None,
             timeout=CONNECT_TIMEOUT,
         )
-        await client.write_gatt_char(BLE_CHAR_UUID, data, response=False)
+        await client.write_gatt_char(BLE_CHAR_HANDLE, data, response=False)
         return True
     except Exception as e:
         err = str(e).lower()
@@ -1276,12 +1276,12 @@ async def _standalone_calibration_loop(
             timeout=CONNECT_TIMEOUT,
         )
         while True:
-            await client.write_gatt_char(BLE_CHAR_UUID, command, response=False)
+            await client.write_gatt_char(BLE_CHAR_HANDLE, command, response=False)
             await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
     except asyncio.CancelledError:
         try:
             if client:
-                await client.write_gatt_char(BLE_CHAR_UUID, CMD_STOP, response=False)
+                await client.write_gatt_char(BLE_CHAR_HANDLE, CMD_STOP, response=False)
         except Exception:
             pass
         raise
