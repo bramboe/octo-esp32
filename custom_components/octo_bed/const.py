@@ -17,6 +17,8 @@ DEFAULT_FEET_CALIBRATION_SEC = 30.0
 # BLE service and characteristic (same as ESPHome config)
 BLE_SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 BLE_CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
+# Value handle for FFE1 - some beds fail GATT discovery but accept writes by handle (from BLE capture)
+BLE_CHAR_HANDLE = 0x0011
 
 # Command bytes (from your YAML)
 CMD_STOP = bytes([0x40, 0x02, 0x73, 0x00, 0x00, 0x0B, 0x40])
