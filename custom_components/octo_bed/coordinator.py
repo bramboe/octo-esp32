@@ -594,7 +594,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False
         ble_device = self._get_ble_device()
         if not ble_device:
-            ble_device = await _wait_for_ble_device(self.hass, addr)
+            ble_device = await _wait_for_ble_device(self.hass, addr, max_sec=15.0)
         if not ble_device:
             return False
         client = None
@@ -605,6 +605,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._device_name or "Octo Bed",
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
+                max_attempts=1,
             )
             set_pin_cmd = _make_set_pin(new_pin)
             received: list[bytes] = []
@@ -995,11 +996,13 @@ _WAIT_FOR_DEVICE_INTERVAL_SEC = 2.0
 async def _wait_for_ble_device(
     hass: HomeAssistant,
     address: str,
+    max_sec: float | None = None,
 ) -> Any:
     """Wait for the BLE device to appear in the scanner cache (device may advertise intermittently)."""
     addr = (address or "").strip()
     if not addr:
         return None
+    timeout = max_sec if max_sec is not None else _WAIT_FOR_DEVICE_SEC
     # Try colon format if we have 12 hex chars
     normalized = _normalize_addr(addr)
     addresses_to_try = [addr]
@@ -1008,7 +1011,7 @@ async def _wait_for_ble_device(
         if colon != addr:
             addresses_to_try.append(colon)
     elapsed = 0.0
-    while elapsed < _WAIT_FOR_DEVICE_SEC:
+    while elapsed < timeout:
         for a in addresses_to_try:
             ble_device = bluetooth.async_ble_device_from_address(hass, a, connectable=True)
             if ble_device is None:
