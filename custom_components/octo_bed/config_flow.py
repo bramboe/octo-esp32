@@ -31,7 +31,8 @@ from .coordinator import normalize_pin, validate_pin_with_probe
 _LOGGER = logging.getLogger(__name__)
 
 # Max time for probe + PIN validation so the flow never hangs (progress task timeout)
-VALIDATION_TIMEOUT_SEC = 75
+# Probe (~25s device wait + 15s connect + 4s) + validate (~25s + 15s + 5s) can exceed 75s
+VALIDATION_TIMEOUT_SEC = 120
 
 
 async def _validation_with_timeout(hass: HomeAssistant, address: str, device_name: str, pin: str) -> str:
