@@ -16,6 +16,9 @@ _LOGGER = logging.getLogger(__name__)
 
 SERVICE_SET_HEAD_POSITION = "set_head_position"
 SERVICE_SET_FEET_POSITION = "set_feet_position"
+# ESPHome API compatibility
+SERVICE_SET_BED_HEAD_POSITION = "set_bed_head_position"
+SERVICE_SET_BED_FEET_POSITION = "set_bed_feet_position"
 SERVICE_SET_PIN = "set_pin"
 SERVICE_SEND_SYSTEM_COMMAND = "send_system_command"
 
@@ -134,6 +137,18 @@ def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN,
         SERVICE_SET_FEET_POSITION,
+        async_set_feet_position,
+        schema=SET_POSITION_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_BED_HEAD_POSITION,
+        async_set_head_position,
+        schema=SET_POSITION_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_BED_FEET_POSITION,
         async_set_feet_position,
         schema=SET_POSITION_SCHEMA,
     )
