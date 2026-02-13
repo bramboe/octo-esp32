@@ -1160,6 +1160,14 @@ async def validate_pin(
     if not ble_device:
         _LOGGER.warning("PIN validation: no BLE device for %s (not seen by scanner within %ss)", addr, _WAIT_FOR_DEVICE_SEC)
         return "device_not_found"
+
+    def _get_ble_device() -> Any:
+        """Return fresh device from scanner for retries (avoids stale refs via proxy)."""
+        d = bluetooth.async_ble_device_from_address(hass, addr, connectable=True)
+        if d is None:
+            d = bluetooth.async_ble_device_from_address(hass, addr, connectable=False)
+        return d
+
     client = None
     try:
         client = await establish_connection(
@@ -1170,6 +1178,7 @@ async def validate_pin(
             timeout=CONNECT_TIMEOUT,
             max_attempts=4,
             use_services_cache=False,
+            ble_device_callback=_get_ble_device,
         )
         char_spec = await _find_char_specifier(client)
         keep_alive = _make_keep_alive(pin)
