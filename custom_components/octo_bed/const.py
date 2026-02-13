@@ -74,8 +74,8 @@ PIN_RESPONSE_REJECTED_1B = 0x1B   # wrong PIN: bed sends 40 21 43 00 01 1b 00 40
 PIN_RESPONSE_NOT_SET = 0x1F   # no PIN set yet (e.g. after hard reset); bed sends 40 21 3c 01 00 00 1f 40 — cannot control until set_pin is used
 PIN_RESPONSE_STATUS_BYTE_INDEX = 5
 
-# Connection timeout
-CONNECT_TIMEOUT = 15.0
+# Connection timeout (bed base can be slow to respond, esp. via Bluetooth proxy)
+CONNECT_TIMEOUT = 25.0
 WRITE_TIMEOUT = 5.0
 
 # Keep-alive interval (same as YAML keep_connection_alive script)
