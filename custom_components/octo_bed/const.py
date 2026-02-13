@@ -81,5 +81,7 @@ WRITE_TIMEOUT = 5.0
 # Keep-alive interval (same as YAML keep_connection_alive script)
 KEEP_ALIVE_INTERVAL_SEC = 30
 
-# Send movement command this often over a single BLE connection (avoids connect/disconnect stutter)
-MOVEMENT_COMMAND_INTERVAL_SEC = 0.25
+# Send movement command this often (matches ESPHome 300ms for smooth control)
+MOVEMENT_COMMAND_INTERVAL_SEC = 0.3
+# Delay after stop before starting movement (ESPHome: 500ms for stability)
+DELAY_AFTER_STOP_SEC = 0.5
