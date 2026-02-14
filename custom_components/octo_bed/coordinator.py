@@ -1231,7 +1231,9 @@ async def validate_pin(
             except Exception:
                 pass
 
-        # Fallback: no clear accept (0x1A) – do not accept. Beds that send 0x1b for wrong PIN may stay connected.
+        # Fallback: no explicit 0x1A or 0x18 received (e.g. Bluetooth proxy does not forward notifications).
+        # If device stayed connected, treat as accepted – wrong PIN typically causes disconnect.
+        # Matches coordinator _check_pin_accepted behavior.
         await asyncio.sleep(1.5)
         # Re-check in case notification arrived during sleep
         for data in received:
@@ -1244,13 +1246,8 @@ async def validate_pin(
         if not client.is_connected:
             _LOGGER.info("PIN validation: device disconnected after keep-alive (wrong PIN)")
             return "wrong_pin"
-        try:
-            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-        except Exception as e:
-            _LOGGER.debug("PIN validation: CMD_STOP failed: %s", e)
-        await asyncio.sleep(0.5)
-        # Only accept when we got explicit 0x1A; otherwise reject (avoids adding device on wrong PIN)
-        return "wrong_pin"
+        _LOGGER.debug("PIN validation: no 0x1A/0x18 received but device stayed connected (proxy may not forward notifications)")
+        return "ok"
     except Exception as e:
         err_msg = str(e).lower()
         if "timeout" in err_msg or "failed to connect" in err_msg:
