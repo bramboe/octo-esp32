@@ -70,7 +70,7 @@
       "invalid_mac": "MAC must be exactly 12 hex characters (e.g. AA:BB:CC:DD:EE:FF)",
       "mac_required": "Enter the bed's BLE MAC address (12 hex characters) to verify the PIN before adding.",
       "invalid_pin": "Wrong PIN or could not connect. Check the PIN and try again. Use the bed base BLE MAC, not the remote (RC2).",
-      "no_pin_check": "PIN verification failed (Bluetooth proxy may not forward notifications). If you are using the bed base MAC, try \"Add anyway\".",
+      "no_pin_check": "This device does not verify the PIN (e.g. the RC2 remote). Use the bed base BLE MAC address so the PIN can be checked before adding.",
       "connection_timeout": "Connection timed out. Check the device is on, in range, and try again.",
       "device_not_found": "Device not found. Ensure the bed base is powered on and in range. If using a Bluetooth proxy, try pressing a button on the remote to wake the bed.",
       "no_devices_found": "No Octo Bed remotes found. Ensure remotes are on and in range of your Bluetooth proxy."
