@@ -453,7 +453,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return ble_device
 
     async def _send_command(self, data: bytes) -> bool:
-        """Connect to device (via proxy) and write command. Retries once on failure (transient BLE)."""
+        """Connect to device (via proxy) and write command. Retries once on failure (transient BLE).
+        Sends keep-alive first when the command is not keep-alive – bed requires auth before accepting other commands."""
         ble_device = self._get_ble_device()
         if not ble_device:
             if self.device_address:
@@ -464,6 +465,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 _LOGGER.debug("Octo Bed: no address configured, skipping BLE command")
             return False
+        keep_alive = _make_keep_alive(self.pin)
         last_error = None
         for attempt in range(2):
             client = None
@@ -475,6 +477,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     disconnected_callback=None,
                     timeout=CONNECT_TIMEOUT,
                 )
+                if data != keep_alive:
+                    await _write_gatt_char_flexible(client, keep_alive, response=False)
+                    await asyncio.sleep(0.15)
                 await _write_gatt_char_flexible(client, data, response=False)
                 return True
             except Exception as e:
@@ -734,6 +739,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=CONNECT_TIMEOUT,
             )
             char_spec = await _find_char_specifier(client)
+            await _write_gatt_char_flexible(client, _make_keep_alive(self.pin), response=False)
+            await asyncio.sleep(0.15)
             while not is_cancelled():
                 await client.write_gatt_char(char_spec, command, response=False)
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
@@ -775,6 +782,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=CONNECT_TIMEOUT,
             )
             char_spec = await _find_char_specifier(client)
+            await _write_gatt_char_flexible(client, _make_keep_alive(self.pin), response=False)
+            await asyncio.sleep(0.15)
             end_ts = self.hass.loop.time() + duration_sec
             while self.hass.loop.time() < end_ts:
                 await client.write_gatt_char(char_spec, command, response=False)
@@ -893,6 +902,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=CONNECT_TIMEOUT,
             )
             char_spec = await _find_char_specifier(client)
+            await _write_gatt_char_flexible(client, _make_keep_alive(self.pin), response=False)
+            await asyncio.sleep(0.15)
             while not stop_event.is_set():
                 await client.write_gatt_char(char_spec, command, response=False)
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
