@@ -23,6 +23,7 @@ from .const import (
     CMD_FEET_UP,
     CMD_HEAD_DOWN,
     CMD_HEAD_UP,
+    COVER_DEBOUNCE_SEC,
     DOMAIN,
 )
 from .coordinator import OctoBedCoordinator
@@ -58,24 +59,55 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
     _attr_name = "Head"
     _attr_unique_id = "head_cover"
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._debounce_timer: asyncio.TimerHandle | None = None
+        self._pending_target: float | None = None
+
     @property
     def current_cover_position(self) -> int | None:
         return int(round(self.coordinator.head_position))
 
     async def async_open_cover(self, **kwargs: Any) -> None:
+        self._cancel_debounce()
         await self._run_to_position(100.0, is_head=True)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
+        self._cancel_debounce()
         await self._run_to_position(0.0, is_head=True)
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
+        self._cancel_debounce()
         await self.coordinator.async_send_stop()
         self.coordinator.set_movement_active(False)
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         position = kwargs.get(ATTR_POSITION)
-        if position is not None:
-            await self._run_to_position(float(position), is_head=True)
+        if position is None:
+            return
+        target = float(position)
+        self._cancel_debounce()
+        self._pending_target = target
+        self._debounce_timer = self.hass.loop.call_later(
+            COVER_DEBOUNCE_SEC, self._debounce_timer_fired_head
+        )
+
+    def _debounce_timer_fired_head(self) -> None:
+        self._debounce_timer = None
+        target = self._pending_target
+        self._pending_target = None
+        if target is not None:
+            self.hass.async_create_task(self._run_to_position(target, is_head=True))
+
+    def _cancel_debounce(self) -> None:
+        if self._debounce_timer:
+            self._debounce_timer.cancel()
+            self._debounce_timer = None
+        self._pending_target = None
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._cancel_debounce()
+        await super().async_will_remove_from_hass()
 
     async def _run_to_position(self, target: float, is_head: bool) -> None:
         """Run head or feet to target 0-100 over a single BLE connection (smooth movement)."""
@@ -93,6 +125,7 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         diff = abs(target - current)
         if diff < 0.5:
             return
+        # 100% travel = full calibration time (cal_ms)
         duration_ms = int((diff / 100.0) * cal_ms)
         duration_ms = max(300, min(cal_ms, duration_ms))
         duration_sec = duration_ms / 1000.0
@@ -107,24 +140,55 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
     _attr_name = "Feet"
     _attr_unique_id = "feet_cover"
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._debounce_timer: asyncio.TimerHandle | None = None
+        self._pending_target: float | None = None
+
     @property
     def current_cover_position(self) -> int | None:
         return int(round(self.coordinator.feet_position))
 
     async def async_open_cover(self, **kwargs: Any) -> None:
+        self._cancel_debounce()
         await self._run_to_position(100.0, is_head=False)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
+        self._cancel_debounce()
         await self._run_to_position(0.0, is_head=False)
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
+        self._cancel_debounce()
         await self.coordinator.async_send_stop()
         self.coordinator.set_movement_active(False)
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         position = kwargs.get(ATTR_POSITION)
-        if position is not None:
-            await self._run_to_position(float(position), is_head=False)
+        if position is None:
+            return
+        target = float(position)
+        self._cancel_debounce()
+        self._pending_target = target
+        self._debounce_timer = self.hass.loop.call_later(
+            COVER_DEBOUNCE_SEC, self._debounce_timer_fired_feet
+        )
+
+    def _debounce_timer_fired_feet(self) -> None:
+        self._debounce_timer = None
+        target = self._pending_target
+        self._pending_target = None
+        if target is not None:
+            self.hass.async_create_task(self._run_to_position(target, is_head=False))
+
+    def _cancel_debounce(self) -> None:
+        if self._debounce_timer:
+            self._debounce_timer.cancel()
+            self._debounce_timer = None
+        self._pending_target = None
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._cancel_debounce()
+        await super().async_will_remove_from_hass()
 
     async def _run_to_position(self, target: float, is_head: bool) -> None:
         coordinator = self.coordinator
@@ -133,6 +197,7 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
         diff = abs(target - current)
         if diff < 0.5:
             return
+        # 100% travel = full calibration time (cal_ms)
         duration_ms = int((diff / 100.0) * cal_ms)
         duration_ms = max(300, min(cal_ms, duration_ms))
         duration_sec = duration_ms / 1000.0
@@ -148,6 +213,11 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
     _attr_name = "Both"
     _attr_unique_id = "both_cover"
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._debounce_timer: asyncio.TimerHandle | None = None
+        self._pending_target: float | None = None
+
     @property
     def current_cover_position(self) -> int | None:
         h = self.coordinator.head_position
@@ -155,19 +225,45 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
         return int(round((h + f) / 2.0))
 
     async def async_open_cover(self, **kwargs: Any) -> None:
+        self._cancel_debounce()
         await self._run_both_to_position(100.0)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
+        self._cancel_debounce()
         await self._run_both_to_position(0.0)
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
+        self._cancel_debounce()
         await self.coordinator.async_send_stop()
         self.coordinator.set_movement_active(False)
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         position = kwargs.get(ATTR_POSITION)
-        if position is not None:
-            await self._run_both_to_position(float(position))
+        if position is None:
+            return
+        target = float(position)
+        self._cancel_debounce()
+        self._pending_target = target
+        self._debounce_timer = self.hass.loop.call_later(
+            COVER_DEBOUNCE_SEC, self._debounce_timer_fired_both
+        )
+
+    def _debounce_timer_fired_both(self) -> None:
+        self._debounce_timer = None
+        target = self._pending_target
+        self._pending_target = None
+        if target is not None:
+            self.hass.async_create_task(self._run_both_to_position(target))
+
+    def _cancel_debounce(self) -> None:
+        if self._debounce_timer:
+            self._debounce_timer.cancel()
+            self._debounce_timer = None
+        self._pending_target = None
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._cancel_debounce()
+        await super().async_will_remove_from_hass()
 
     async def _run_both_to_position(self, target: float) -> None:
         """Move both sections to target; single BLE connection per phase for smooth movement."""
@@ -176,6 +272,7 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
         feet_current = coordinator.feet_position
         head_diff = abs(target - head_current)
         feet_diff = abs(target - feet_current)
+        # 100% travel = full calibration time
         head_duration_ms = int((head_diff / 100.0) * coordinator.head_calibration_ms) if head_diff >= 0.5 else 0
         feet_duration_ms = int((feet_diff / 100.0) * coordinator.feet_calibration_ms) if feet_diff >= 0.5 else 0
         head_duration_ms = max(300, head_duration_ms)
