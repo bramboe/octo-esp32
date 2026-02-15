@@ -17,8 +17,6 @@ DEFAULT_FEET_CALIBRATION_SEC = 30.0
 # BLE service and characteristic (same as ESPHome config)
 BLE_SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 BLE_CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
-# Value handle for FFE1 - some beds fail GATT discovery but accept writes by handle (from BLE capture)
-BLE_CHAR_HANDLE = 0x0011
 
 # Command bytes (from your YAML)
 CMD_STOP = bytes([0x40, 0x02, 0x73, 0x00, 0x00, 0x0B, 0x40])
@@ -77,6 +75,8 @@ PIN_RESPONSE_STATUS_BYTE_INDEX = 5
 # Connection timeout per attempt (fast when device responds; retries handle transient failures)
 CONNECT_TIMEOUT = 15.0
 WRITE_TIMEOUT = 5.0
+# Delay after connect before first write (YAML on_connect: "ensure service discovery completes")
+DELAY_AFTER_CONNECT_SEC = 1.0
 
 # Keep-alive interval (same as YAML keep_connection_alive script)
 KEEP_ALIVE_INTERVAL_SEC = 30
