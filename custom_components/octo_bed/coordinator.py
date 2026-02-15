@@ -918,8 +918,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._device_address = None
 
     async def _calibration_loop(self, head: bool) -> None:
-        """Match ESPHome YAML: stop_all_movements+1s, keep-alive, then command every 300ms until stop.
-        Feet: initial command + 500ms before loop (YAML lines 2464-2469).
+        """Same as Feet Up / Head Up switch: keep-alive, then command every 300ms until stop.
         Reconnects on BLE error so calibration continues until user presses stop.
         """
         command = CMD_HEAD_UP if head else CMD_FEET_UP
@@ -949,11 +948,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     client, _make_keep_alive(self.pin), response=False
                 )
                 await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
-                if not head:
-                    await _write_gatt_char_flexible(
-                        client, command, response=False
-                    )
-                    await asyncio.sleep(0.5)
                 while not stop_event.is_set():
                     await _write_gatt_char_flexible(
                         client, command, response=False
