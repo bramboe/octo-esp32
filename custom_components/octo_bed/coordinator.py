@@ -750,9 +750,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         command: bytes,
         is_cancelled: Callable[[], bool],
     ) -> None:
-        """Send one movement command, keep connection until cancelled, then send stop.
-        Bed moves continuously until stop; do not send repeated movement commands.
-        """
+        """Send movement command every 300ms until cancelled (matches ESPHome YAML)."""
         ble_device = self._get_ble_device()
         if not ble_device:
             self.set_movement_active(False)
@@ -767,27 +765,16 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
             )
-            char_spec = await _find_char_specifier(client)
             await _write_gatt_char_flexible(
                 client, _make_keep_alive(self.pin), response=False
             )
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
-            await client.write_gatt_char(char_spec, command, response=False)
-            last_keep_alive = self.hass.loop.time()
             while not is_cancelled():
-                await asyncio.sleep(1.0)
-                now = self.hass.loop.time()
-                if now - last_keep_alive >= KEEP_ALIVE_INTERVAL_SEC:
-                    try:
-                        await _write_gatt_char_flexible(
-                            client, _make_keep_alive(self.pin), response=False
-                        )
-                        last_keep_alive = now
-                    except Exception:
-                        break
-            await client.write_gatt_char(char_spec, CMD_STOP, response=False)
+                await _write_gatt_char_flexible(client, command, response=False)
+                await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
-            await client.write_gatt_char(char_spec, CMD_STOP, response=False)
+            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
         except asyncio.CancelledError:
             await self._send_command(CMD_STOP)
             raise
@@ -831,20 +818,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
-            await _write_gatt_char_flexible(client, command, response=False)
-            last_keep_alive = self.hass.loop.time()
             end_ts = self.hass.loop.time() + duration_sec
             while self.hass.loop.time() < end_ts:
-                await asyncio.sleep(1.0)
-                now = self.hass.loop.time()
-                if now - last_keep_alive >= KEEP_ALIVE_INTERVAL_SEC:
-                    try:
-                        await _write_gatt_char_flexible(
-                            client, keep_alive, response=False
-                        )
-                        last_keep_alive = now
-                    except Exception:
-                        break
+                await _write_gatt_char_flexible(client, command, response=False)
+                await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
@@ -941,7 +918,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._device_address = None
 
     async def _calibration_loop(self, head: bool) -> None:
-        """Send one movement command (head/feet up), keep connection until user stops, then send stop."""
+        """Send movement command every 300ms until user stops (matches ESPHome YAML behavior)."""
         command = CMD_HEAD_UP if head else CMD_FEET_UP
         stop_event = self._calibration_stop_event
         if not stop_event:
@@ -964,27 +941,16 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
             )
-            char_spec = await _find_char_specifier(client)
             await _write_gatt_char_flexible(
                 client, _make_keep_alive(self.pin), response=False
             )
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
-            await client.write_gatt_char(char_spec, command, response=False)
-            last_keep_alive = self.hass.loop.time()
             while not stop_event.is_set():
-                await asyncio.sleep(1.0)
-                now = self.hass.loop.time()
-                if now - last_keep_alive >= KEEP_ALIVE_INTERVAL_SEC:
-                    try:
-                        await _write_gatt_char_flexible(
-                            client, _make_keep_alive(self.pin), response=False
-                        )
-                        last_keep_alive = now
-                    except Exception:
-                        break
-            await client.write_gatt_char(char_spec, CMD_STOP, response=False)
+                await _write_gatt_char_flexible(client, command, response=False)
+                await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
-            await client.write_gatt_char(char_spec, CMD_STOP, response=False)
+            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
         except asyncio.CancelledError:
             if client:
                 try:
