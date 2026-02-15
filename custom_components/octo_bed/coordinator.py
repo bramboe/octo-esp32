@@ -918,54 +918,75 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._device_address = None
 
     async def _calibration_loop(self, head: bool) -> None:
-        """Send movement command every 300ms until user stops (matches ESPHome YAML behavior)."""
+        """Match ESPHome YAML: stop_all_movements+1s, keep-alive, then command every 300ms until stop.
+        Feet: initial command + 500ms before loop (YAML lines 2464-2469).
+        Reconnects on BLE error so calibration continues until user presses stop.
+        """
         command = CMD_HEAD_UP if head else CMD_FEET_UP
         stop_event = self._calibration_stop_event
         if not stop_event:
             return
         section = "head" if head else "feet"
-        ble_device = self._get_ble_device()
-        if not ble_device and self.device_address:
-            ble_device = await _wait_for_ble_device(
-                self.hass, self.device_address, max_sec=15.0
-            )
-        if not ble_device:
-            _LOGGER.warning("Calibration: BLE device not available, stopping")
-            return
-        client = None
-        try:
-            client = await establish_connection(
-                BleakClientWithServiceCache,
-                ble_device,
-                self._device_name or "Octo Bed",
-                disconnected_callback=None,
-                timeout=CONNECT_TIMEOUT,
-            )
-            await _write_gatt_char_flexible(
-                client, _make_keep_alive(self.pin), response=False
-            )
-            await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
-            while not stop_event.is_set():
-                await _write_gatt_char_flexible(client, command, response=False)
-                await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
-            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-            await asyncio.sleep(0.1)
-            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-        except asyncio.CancelledError:
-            if client:
-                try:
+        while not stop_event.is_set():
+            ble_device = self._get_ble_device()
+            if not ble_device and self.device_address:
+                ble_device = await _wait_for_ble_device(
+                    self.hass, self.device_address, max_sec=15.0
+                )
+            if not ble_device:
+                _LOGGER.warning("Calibration: BLE device not available, stopping")
+                return
+            client = None
+            try:
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    self._device_name or "Octo Bed",
+                    disconnected_callback=None,
+                    timeout=CONNECT_TIMEOUT,
+                )
+                await _write_gatt_char_flexible(
+                    client, _make_keep_alive(self.pin), response=False
+                )
+                await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                if not head:
                     await _write_gatt_char_flexible(
-                        client, CMD_STOP, response=False
+                        client, command, response=False
                     )
-                except Exception:
-                    pass
-            raise
-        except Exception as e:
-            _LOGGER.warning("Calibration %s BLE error: %s", section, e)
-            await self._send_command(CMD_STOP)
-        finally:
-            if client:
-                await client.disconnect()
+                    await asyncio.sleep(0.5)
+                while not stop_event.is_set():
+                    await _write_gatt_char_flexible(
+                        client, command, response=False
+                    )
+                    await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+                await _write_gatt_char_flexible(
+                    client, CMD_STOP, response=False
+                )
+                await asyncio.sleep(0.1)
+                await _write_gatt_char_flexible(
+                    client, CMD_STOP, response=False
+                )
+            except asyncio.CancelledError:
+                if client:
+                    try:
+                        await _write_gatt_char_flexible(
+                            client, CMD_STOP, response=False
+                        )
+                    except Exception:
+                        pass
+                raise
+            except Exception as e:
+                _LOGGER.warning(
+                    "Calibration %s BLE error (reconnecting): %s", section, e
+                )
+                await self._send_command(CMD_STOP)
+                if stop_event.is_set():
+                    break
+                await asyncio.sleep(2.0)
+            finally:
+                if client:
+                    await client.disconnect()
+        await self._send_command(CMD_STOP)
 
     def _calibration_notification_id(self) -> str:
         return f"octo_bed_calibration_{self._entry.entry_id}"
