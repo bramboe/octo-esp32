@@ -83,7 +83,9 @@ KEEP_ALIVE_INTERVAL_SEC = 30
 
 # Send movement command this often (matches ESPHome 300ms for smooth control)
 MOVEMENT_COMMAND_INTERVAL_SEC = 0.3
-# Delay after stop before starting movement (ESPHome: 500ms for stability)
-DELAY_AFTER_STOP_SEC = 0.5
+# Delay after keep-alive before next command (bed needs brief time to process)
+KEEP_ALIVE_DELAY_SEC = 0.05
+# Delay after stop before starting movement (same connection; 250ms for bed to settle)
+DELAY_AFTER_STOP_SAME_CONN_SEC = 0.25
 # Debounce cover slider: wait for user to release before starting movement (prevents stuttering)
 COVER_DEBOUNCE_SEC = 0.35
