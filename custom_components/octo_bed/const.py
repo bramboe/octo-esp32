@@ -85,3 +85,5 @@ KEEP_ALIVE_INTERVAL_SEC = 30
 MOVEMENT_COMMAND_INTERVAL_SEC = 0.3
 # Delay after stop before starting movement (ESPHome: 500ms for stability)
 DELAY_AFTER_STOP_SEC = 0.5
+# Debounce cover slider: wait for user to release before starting movement (prevents stuttering)
+COVER_DEBOUNCE_SEC = 0.35
