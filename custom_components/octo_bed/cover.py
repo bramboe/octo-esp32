@@ -129,8 +129,9 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         duration_ms = int((diff / 100.0) * cal_ms)
         duration_ms = max(300, min(cal_ms, duration_ms))
         duration_sec = duration_ms / 1000.0
-        await coordinator.async_run_movement_for_duration(command, duration_sec)
-        set_pos(target)
+        ok = await coordinator.async_run_movement_for_duration(command, duration_sec)
+        if ok:
+            set_pos(target)
         self.async_write_ha_state()
 
 
@@ -202,8 +203,9 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
         duration_ms = max(300, min(cal_ms, duration_ms))
         duration_sec = duration_ms / 1000.0
         command = CMD_FEET_UP if target > current else CMD_FEET_DOWN
-        await coordinator.async_run_movement_for_duration(command, duration_sec)
-        coordinator.set_feet_position(target)
+        ok = await coordinator.async_run_movement_for_duration(command, duration_sec)
+        if ok:
+            coordinator.set_feet_position(target)
         self.async_write_ha_state()
 
 
@@ -279,28 +281,37 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
         feet_duration_ms = max(300, feet_duration_ms)
         if target > head_current and target > feet_current:
             duration_total = max(head_duration_ms, feet_duration_ms)
-            await coordinator.async_run_movement_for_duration(
+            ok = await coordinator.async_run_movement_for_duration(
                 CMD_BOTH_UP, duration_total / 1000.0
             )
+            if ok:
+                coordinator.set_head_position(target)
+                coordinator.set_feet_position(target)
         elif target < head_current and target < feet_current:
             duration_total = max(head_duration_ms, feet_duration_ms)
-            await coordinator.async_run_movement_for_duration(
+            ok = await coordinator.async_run_movement_for_duration(
                 CMD_BOTH_DOWN, duration_total / 1000.0
             )
+            if ok:
+                coordinator.set_head_position(target)
+                coordinator.set_feet_position(target)
         else:
+            head_ok = True
+            feet_ok = True
             if head_diff >= 0.5:
                 cmd = CMD_HEAD_UP if target > head_current else CMD_HEAD_DOWN
-                await coordinator.async_run_movement_for_duration(
+                head_ok = await coordinator.async_run_movement_for_duration(
                     cmd, head_duration_ms / 1000.0
                 )
             if feet_diff >= 0.5:
                 await asyncio.sleep(0.5)
                 cmd = CMD_FEET_UP if target > feet_current else CMD_FEET_DOWN
-                await coordinator.async_run_movement_for_duration(
+                feet_ok = await coordinator.async_run_movement_for_duration(
                     cmd, feet_duration_ms / 1000.0
                 )
-            coordinator.set_head_position(target)
-            coordinator.set_feet_position(target)
+            if head_ok and feet_ok:
+                coordinator.set_head_position(target)
+                coordinator.set_feet_position(target)
         self.async_write_ha_state()
 
 
