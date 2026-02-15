@@ -918,7 +918,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._device_address = None
 
     async def _calibration_loop(self, head: bool) -> None:
-        """Same as Feet Up / Head Up switch: keep-alive, then command every 300ms until stop.
+        """Same as Head Up / Feet Up switch: keep-alive, then CMD_HEAD_UP or CMD_FEET_UP every 300ms until stop.
         Reconnects on BLE error so calibration continues until user presses stop.
         """
         command = CMD_HEAD_UP if head else CMD_FEET_UP
