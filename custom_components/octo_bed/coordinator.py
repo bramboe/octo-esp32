@@ -14,9 +14,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
-    BLE_CHAR_HANDLE,
     BLE_CHAR_UUID,
     CONF_DEVICE_ADDRESS,
+    DELAY_AFTER_CONNECT_SEC,
     DELAY_AFTER_STOP_SAME_CONN_SEC,
     DOMAIN,
     CONF_DEVICE_NICKNAME,
@@ -82,40 +82,17 @@ def _make_set_pin(pin: str) -> bytes:
     return SET_PIN_PREFIX + _pin_to_digits(pin) + KEEP_ALIVE_SUFFIX
 
 
-def _is_char_not_found_error(exc: Exception) -> bool:
-    """True if the exception indicates the characteristic was not found (UUID/handle varies by backend)."""
-    msg = str(exc).lower()
-    return "not found" in msg and ("characteristic" in msg or "ffe1" in msg)
-
-
 async def _write_gatt_char_flexible(
     client: Any, data: bytes, response: bool = False
 ) -> None:
-    """Write to FFE1, trying UUID then handle (some backends fail on one)."""
-    for spec in (BLE_CHAR_UUID, BLE_CHAR_HANDLE):
-        try:
-            await client.write_gatt_char(spec, data, response=response)
-            return
-        except Exception as e:
-            if _is_char_not_found_error(e) and spec == BLE_CHAR_UUID:
-                _LOGGER.debug("Write via UUID failed (%s), trying handle", e)
-                continue
-            raise
-    raise RuntimeError("Characteristic not found (tried UUID and handle)")
+    """Write to FFE1 (YAML: service_uuid ffe0, characteristic_uuid ffe1). Use UUID only - handle fails on Bluetooth proxy."""
+    await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
 
 
-async def _find_char_specifier(client: Any) -> str | int:
-    """Return UUID or handle that works for this client. Tries a no-op write."""
-    for spec in (BLE_CHAR_UUID, BLE_CHAR_HANDLE):
-        try:
-            # Minimal write to discover which specifier works
-            await client.write_gatt_char(spec, CMD_STOP, response=False)
-            return spec
-        except Exception as e:
-            if _is_char_not_found_error(e) and spec == BLE_CHAR_UUID:
-                continue
-            raise
-    raise RuntimeError("Characteristic not found (tried UUID and handle)")
+async def _find_char_specifier(client: Any) -> str:
+    """Return UUID for FFE1 (YAML: characteristic_uuid ffe1). Use UUID only - handle fails on Bluetooth proxy."""
+    await client.write_gatt_char(BLE_CHAR_UUID, CMD_STOP, response=False)
+    return BLE_CHAR_UUID
 
 
 def _parse_pin_response(data: bytes) -> bool | None:
@@ -327,6 +304,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
             )
+            await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
             keep_alive = _make_keep_alive(self.pin)
             received: list[bytes] = []
             notif_event = asyncio.Event()
@@ -485,6 +463,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     disconnected_callback=None,
                     timeout=CONNECT_TIMEOUT,
                 )
+                await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
                 if data != keep_alive:
                     await _write_gatt_char_flexible(client, keep_alive, response=False)
                     await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
@@ -518,6 +497,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
             )
+            await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
             char_spec = await _find_char_specifier(client)
             received: list[bytes] = []
             notif_event = asyncio.Event()
@@ -565,6 +545,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
             )
+            await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
             await _write_gatt_char_flexible(client, keep_alive, response=False)
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
@@ -685,6 +666,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=CONNECT_TIMEOUT,
                 max_attempts=2,
             )
+            await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
             set_pin_cmd = _make_set_pin(new_pin)
             received: list[bytes] = []
             notif_event = asyncio.Event()
@@ -765,6 +747,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
             )
+            await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
             await _write_gatt_char_flexible(
                 client, _make_keep_alive(self.pin), response=False
             )
@@ -811,6 +794,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
             )
+            await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
             keep_alive = _make_keep_alive(self.pin)
             await _write_gatt_char_flexible(client, keep_alive, response=False)
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
@@ -944,6 +928,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     disconnected_callback=None,
                     timeout=CONNECT_TIMEOUT,
                 )
+                await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
                 await _write_gatt_char_flexible(
                     client, _make_keep_alive(self.pin), response=False
                 )
@@ -1223,6 +1208,7 @@ async def probe_device_validates_pin(
             timeout=CONNECT_TIMEOUT,
             max_attempts=2,
         )
+        await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
         char_spec = await _find_char_specifier(client)
         keep_alive = _make_keep_alive(_PROBE_WRONG_PIN)
         received: list[bytes] = []
@@ -1329,6 +1315,7 @@ async def validate_pin(
             use_services_cache=False,
             ble_device_callback=_get_ble_device,
         )
+        await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
         char_spec = await _find_char_specifier(client)
         keep_alive = _make_keep_alive(pin)
         received: list[bytes] = []
@@ -1428,6 +1415,7 @@ async def send_single_command(
             disconnected_callback=None,
             timeout=CONNECT_TIMEOUT,
         )
+        await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
         await _write_gatt_char_flexible(client, data, response=False)
         return True
     except Exception as e:
@@ -1472,6 +1460,7 @@ async def _standalone_calibration_loop(
             disconnected_callback=None,
             timeout=CONNECT_TIMEOUT,
         )
+        await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
         while True:
             await _write_gatt_char_flexible(client, command, response=False)
             await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
