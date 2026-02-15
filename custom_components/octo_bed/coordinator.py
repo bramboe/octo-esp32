@@ -750,7 +750,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         command: bytes,
         is_cancelled: Callable[[], bool],
     ) -> None:
-        """Send one movement command, keep connection until user turns off. Sends CMD_STOP when done."""
+        """Send one movement command, keep connection until cancelled, then send stop.
+        Bed moves continuously until stop; do not send repeated movement commands.
+        """
         ble_device = self._get_ble_device()
         if not ble_device:
             self.set_movement_active(False)
@@ -1012,7 +1014,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     title=title,
                     notification_id=notification_id,
                 )
-                self.async_request_refresh()
+                await self.async_request_refresh()
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             pass
@@ -1082,7 +1084,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_active = False
         self._calibration_mode = 0
         self.hass.async_create_task(self._stop_calibration_notification())
-        self.async_request_refresh()
+        self.hass.async_create_task(self.async_request_refresh())
 
     async def async_stop_calibration(self) -> tuple[bool, float | None, float | None]:
         """Stop calibration, save duration, set position to 100%%, run move_to_zero. Returns (ok, head_sec, feet_sec)."""
