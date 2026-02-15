@@ -824,7 +824,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
             )
-            char_spec = await _find_char_specifier(client)
             keep_alive = _make_keep_alive(self.pin)
             await _write_gatt_char_flexible(client, keep_alive, response=False)
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
@@ -832,13 +831,23 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
+            await _write_gatt_char_flexible(client, command, response=False)
+            last_keep_alive = self.hass.loop.time()
             end_ts = self.hass.loop.time() + duration_sec
             while self.hass.loop.time() < end_ts:
-                await client.write_gatt_char(char_spec, command, response=False)
-                await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
-            await client.write_gatt_char(char_spec, CMD_STOP, response=False)
+                await asyncio.sleep(1.0)
+                now = self.hass.loop.time()
+                if now - last_keep_alive >= KEEP_ALIVE_INTERVAL_SEC:
+                    try:
+                        await _write_gatt_char_flexible(
+                            client, keep_alive, response=False
+                        )
+                        last_keep_alive = now
+                    except Exception:
+                        break
+            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
-            await client.write_gatt_char(char_spec, CMD_STOP, response=False)
+            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             return True
         except Exception as e:
             _LOGGER.warning("Movement-for-duration BLE error: %s", e)
