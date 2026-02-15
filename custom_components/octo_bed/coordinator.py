@@ -933,10 +933,17 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     client, _make_keep_alive(self.pin), response=False
                 )
                 await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                last_keep_alive = self.hass.loop.time()
                 while not stop_event.is_set():
                     await _write_gatt_char_flexible(
                         client, command, response=False
                     )
+                    now = self.hass.loop.time()
+                    if now - last_keep_alive >= KEEP_ALIVE_INTERVAL_SEC:
+                        await _write_gatt_char_flexible(
+                            client, _make_keep_alive(self.pin), response=False
+                        )
+                        last_keep_alive = now
                     await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
                 await _write_gatt_char_flexible(
                     client, CMD_STOP, response=False
@@ -958,10 +965,13 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.warning(
                     "Calibration %s BLE error (reconnecting): %s", section, e
                 )
-                await self._send_command(CMD_STOP)
+                try:
+                    await self._send_command(CMD_STOP)
+                except Exception:
+                    pass
                 if stop_event.is_set():
                     break
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(1.0)
             finally:
                 if client:
                     await client.disconnect()
