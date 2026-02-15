@@ -1212,6 +1212,7 @@ async def probe_device_validates_pin(
 
         try:
             await client.start_notify(char_spec, _on_notification)
+            await asyncio.sleep(0.2)
         except Exception as e:
             _LOGGER.debug("Probe: could not start notifications: %s", e)
         try:
@@ -1223,7 +1224,7 @@ async def probe_device_validates_pin(
                 except Exception:
                     return False
             try:
-                await asyncio.wait_for(notif_event.wait(), timeout=1.5)
+                await asyncio.wait_for(notif_event.wait(), timeout=2.5)
             except asyncio.TimeoutError:
                 pass
             # If bed sends 0x18 (rejected), it validates PIN – return immediately
@@ -1317,6 +1318,7 @@ async def validate_pin(
 
         try:
             await client.start_notify(char_spec, _on_notification)
+            await asyncio.sleep(0.2)  # Let CCC enable settle (official app enables before commands)
         except Exception as e:
             _LOGGER.debug("PIN validation: could not start notifications: %s", e)
         try:
@@ -1328,7 +1330,7 @@ async def validate_pin(
                 except Exception:
                     return "connection_failed"
             try:
-                await asyncio.wait_for(notif_event.wait(), timeout=2.5)
+                await asyncio.wait_for(notif_event.wait(), timeout=3.5)
             except asyncio.TimeoutError:
                 pass
             # Check all notifications: rejection (0x18/0x1b) is instant failure; accept (0x1A) is success
@@ -1346,8 +1348,6 @@ async def validate_pin(
                 pass
 
         # Fallback: no explicit 0x1A or 0x18 received (e.g. Bluetooth proxy does not forward notifications).
-        # If device stayed connected, treat as accepted – wrong PIN typically causes disconnect.
-        # Matches coordinator _check_pin_accepted behavior.
         await asyncio.sleep(1.5)
         # Re-check in case notification arrived during sleep
         for data in received:
@@ -1358,8 +1358,15 @@ async def validate_pin(
                 return "ok"
         await asyncio.sleep(1.0)
         if not client.is_connected:
-            _LOGGER.info("PIN validation: device disconnected after keep-alive (wrong PIN)")
-            return "wrong_pin"
+            # Disconnect without explicit 0x18 reject: could be wrong PIN or connection drop.
+            # Do NOT return wrong_pin – that would trigger probe and can falsely show "no_pin_check".
+            # Return connection_failed so user can retry (avoids misclassifying bed base as RC2).
+            _LOGGER.info(
+                "PIN validation: device disconnected without explicit reject (0x18). "
+                "Treating as connection issue – retry with bed base MAC and correct PIN."
+            )
+            return "connection_failed"
+        # Device stayed connected – treat as accepted (proxy may not forward 0x1A).
         _LOGGER.debug("PIN validation: no 0x1A/0x18 received but device stayed connected (proxy may not forward notifications)")
         return "ok"
     except Exception as e:
