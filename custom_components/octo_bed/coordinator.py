@@ -8,7 +8,7 @@ from datetime import timedelta
 from typing import Any, Callable
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
-from homeassistant.components import bluetooth
+from homeassistant.components import bluetooth, persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -17,7 +17,7 @@ from .const import (
     BLE_CHAR_HANDLE,
     BLE_CHAR_UUID,
     CONF_DEVICE_ADDRESS,
-    DELAY_AFTER_STOP_SEC,
+    DELAY_AFTER_STOP_SAME_CONN_SEC,
     DOMAIN,
     CONF_DEVICE_NICKNAME,
     CONNECT_TIMEOUT,
@@ -34,6 +34,7 @@ from .const import (
     CMD_STOP,
     DEFAULT_FEET_CALIBRATION_SEC,
     DEFAULT_HEAD_CALIBRATION_SEC,
+    KEEP_ALIVE_DELAY_SEC,
     KEEP_ALIVE_INTERVAL_SEC,
     KEEP_ALIVE_PREFIX,
     KEEP_ALIVE_SUFFIX,
@@ -181,6 +182,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_task: asyncio.Task[None] | None = None
         self._calibration_active = False
         self._calibration_stop_event: asyncio.Event | None = None
+        self._calibration_notification_task: asyncio.Task[None] | None = None
+        self._calibration_stopping = False
         # Test scan: send pattern-based system commands with delay; Stop test scan cancels it
         self._test_scan_task: asyncio.Task[None] | None = None
         self._test_scan_stop: asyncio.Event | None = None
@@ -295,6 +298,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "connection_status": connection_status,
             "calibration_active": self._calibration_active,
         }
+        if self._calibration_active:
+            elapsed = self.hass.loop.time() - self._calibration_start_time
+            data["calibration_elapsed_sec"] = round(elapsed, 1)
+            data["calibration_elapsed_formatted"] = _format_elapsed(elapsed)
+            data["calibration_section"] = "head" if self._calibration_mode == 1 else "feet"
         if self._last_device_notification_hex:
             data["last_device_notification"] = self._last_device_notification_hex
         if self._test_scan_total and self._test_scan_last_index:
@@ -479,7 +487,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 if data != keep_alive:
                     await _write_gatt_char_flexible(client, keep_alive, response=False)
-                    await asyncio.sleep(0.15)
+                    await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
                 await _write_gatt_char_flexible(client, data, response=False)
                 return True
             except Exception as e:
@@ -543,11 +551,32 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await client.disconnect()
 
     async def async_send_stop(self) -> bool:
-        """Send stop command twice (ESPHome pattern for reliability)."""
-        ok1 = await self._send_command(CMD_STOP)
-        await asyncio.sleep(0.1)
-        ok2 = await self._send_command(CMD_STOP)
-        return ok1 or ok2
+        """Send stop command twice (ESPHome pattern for reliability). Single connection to reduce latency."""
+        ble_device = self._get_ble_device()
+        if not ble_device:
+            return False
+        keep_alive = _make_keep_alive(self.pin)
+        client = None
+        try:
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                self._device_name or "Octo Bed",
+                disconnected_callback=None,
+                timeout=CONNECT_TIMEOUT,
+            )
+            await _write_gatt_char_flexible(client, keep_alive, response=False)
+            await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+            await asyncio.sleep(0.1)
+            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+            return True
+        except Exception as e:
+            _LOGGER.debug("async_send_stop failed: %s", e)
+            return False
+        finally:
+            if client:
+                await client.disconnect()
 
     async def async_send_make_discoverable(self) -> bool:
         """Send make-discoverable command twice (like pressing hub button 2× = teach remote)."""
@@ -740,7 +769,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             char_spec = await _find_char_specifier(client)
             await _write_gatt_char_flexible(client, _make_keep_alive(self.pin), response=False)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
             while not is_cancelled():
                 await client.write_gatt_char(char_spec, command, response=False)
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
@@ -762,15 +791,17 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self, command: bytes, duration_sec: float
     ) -> bool:
         """Run a movement command for a fixed duration over a single BLE connection.
-        Sends command repeatedly at MOVEMENT_COMMAND_INTERVAL_SEC, then STOP. Returns True on success.
+        Sends stop first (same connection), then command repeatedly. Returns True on success.
         """
         if duration_sec <= 0:
             return True
         ble_device = self._get_ble_device()
         if not ble_device:
+            _LOGGER.warning(
+                "Movement: no BLE device for %s (device may be out of range or not discovered)",
+                self.device_address,
+            )
             return False
-        await self.async_send_stop()
-        await asyncio.sleep(DELAY_AFTER_STOP_SEC)
         self.set_movement_active(True)
         client = None
         try:
@@ -782,8 +813,13 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=CONNECT_TIMEOUT,
             )
             char_spec = await _find_char_specifier(client)
-            await _write_gatt_char_flexible(client, _make_keep_alive(self.pin), response=False)
-            await asyncio.sleep(0.15)
+            keep_alive = _make_keep_alive(self.pin)
+            await _write_gatt_char_flexible(client, keep_alive, response=False)
+            await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+            await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
+            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+            await asyncio.sleep(0.1)
             end_ts = self.hass.loop.time() + duration_sec
             while self.hass.loop.time() < end_ts:
                 await client.write_gatt_char(char_spec, command, response=False)
@@ -903,7 +939,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             char_spec = await _find_char_specifier(client)
             await _write_gatt_char_flexible(client, _make_keep_alive(self.pin), response=False)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
             while not stop_event.is_set():
                 await client.write_gatt_char(char_spec, command, response=False)
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
@@ -924,6 +960,54 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if client:
                 await client.disconnect()
 
+    def _calibration_notification_id(self) -> str:
+        return f"octo_bed_calibration_{self._entry.entry_id}"
+
+    async def _calibration_notification_loop(self) -> None:
+        """Update calibration popup and coordinator every second while calibrating."""
+        section = "head" if self._calibration_mode == 1 else "feet"
+        title = f"Octo Bed – Calibrating {section.capitalize()}"
+        notification_id = self._calibration_notification_id()
+        try:
+            while self._calibration_active:
+                elapsed = self.hass.loop.time() - self._calibration_start_time
+                elapsed_str = _format_elapsed(elapsed)
+                message = (
+                    f"**Elapsed: {elapsed_str}**\n\n"
+                    f"Move the bed {section} fully up, then press **Calibration Stop** when done."
+                )
+                persistent_notification.async_create(
+                    self.hass,
+                    message,
+                    title=title,
+                    notification_id=notification_id,
+                )
+                self.async_request_refresh()
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            persistent_notification.async_dismiss(self.hass, notification_id)
+
+    def _start_calibration_notification(self) -> None:
+        """Start the calibration popup and timer update loop."""
+        self._calibration_notification_task = self.hass.async_create_task(
+            self._calibration_notification_loop()
+        )
+
+    async def _stop_calibration_notification(self) -> None:
+        """Cancel the calibration notification task and dismiss popup."""
+        if self._calibration_notification_task and not self._calibration_notification_task.done():
+            self._calibration_notification_task.cancel()
+            try:
+                await asyncio.wait_for(self._calibration_notification_task, timeout=0.5)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            self._calibration_notification_task = None
+        persistent_notification.async_dismiss(
+            self.hass, self._calibration_notification_id()
+        )
+
     async def async_start_calibration_head(self) -> bool:
         """Start head calibration (move head up until user stops). Returns True if started."""
         if self._calibration_task and not self._calibration_task.done():
@@ -937,6 +1021,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_start_time = self.hass.loop.time()
         self.set_head_position(0.0)
         self._calibration_task = self.hass.async_create_task(self._calibration_loop(head=True))
+        self._calibration_task.add_done_callback(self._on_calibration_task_done)
+        self._start_calibration_notification()
         _LOGGER.info("Head calibration started; press CALIBRATION STOP when head is fully up")
         return True
 
@@ -953,42 +1039,59 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_start_time = self.hass.loop.time()
         self.set_feet_position(0.0)
         self._calibration_task = self.hass.async_create_task(self._calibration_loop(head=False))
+        self._calibration_task.add_done_callback(self._on_calibration_task_done)
+        self._start_calibration_notification()
         _LOGGER.info("Feet calibration started; press CALIBRATION STOP when feet are fully up")
         return True
 
+    def _on_calibration_task_done(self, task: asyncio.Task[None]) -> None:
+        """When calibration task completes unexpectedly (e.g. BLE error), stop notification."""
+        if not self._calibration_active or self._calibration_stopping:
+            return
+        # Task finished without user pressing stop – clean up
+        self._calibration_active = False
+        self._calibration_mode = 0
+        self.hass.async_create_task(self._stop_calibration_notification())
+        self.async_request_refresh()
+
     async def async_stop_calibration(self) -> tuple[bool, float | None, float | None]:
         """Stop calibration, save duration, set position to 100%%, run move_to_zero. Returns (ok, head_sec, feet_sec)."""
-        if self._calibration_stop_event:
-            self._calibration_stop_event.set()
-        if self._calibration_task:
-            try:
-                await asyncio.wait_for(self._calibration_task, timeout=5.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                self._calibration_task.cancel()
+        self._calibration_stopping = True
+        try:
+            if self._calibration_stop_event:
+                self._calibration_stop_event.set()
+            if self._calibration_task:
                 try:
-                    await self._calibration_task
-                except asyncio.CancelledError:
-                    pass
-            self._calibration_task = None
-        await self.async_send_stop()
-        await asyncio.sleep(0.2)
-        head_sec = feet_sec = None
-        duration_ms = int((self.hass.loop.time() - self._calibration_start_time) * 1000)
-        duration_ms = max(1000, min(120000, duration_ms))
-        if self._calibration_mode == 1:
-            head_sec = duration_ms / 1000.0
-            self._head_calibration_ms = duration_ms
-            self.set_head_position(100.0)
-            _LOGGER.info("Head calibration saved: %.1f s", head_sec)
-        elif self._calibration_mode == 2:
-            feet_sec = duration_ms / 1000.0
-            self._feet_calibration_ms = duration_ms
-            self.set_feet_position(100.0)
-            _LOGGER.info("Feet calibration saved: %.1f s", feet_sec)
-        self._calibration_mode = 0
-        self._calibration_active = False
-        await self.async_move_to_zero()
-        return True, head_sec, feet_sec
+                    await asyncio.wait_for(self._calibration_task, timeout=5.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    self._calibration_task.cancel()
+                    try:
+                        await self._calibration_task
+                    except asyncio.CancelledError:
+                        pass
+                self._calibration_task = None
+            await self.async_send_stop()
+            await asyncio.sleep(0.2)
+            head_sec = feet_sec = None
+            duration_ms = int((self.hass.loop.time() - self._calibration_start_time) * 1000)
+            duration_ms = max(1000, min(120000, duration_ms))
+            if self._calibration_mode == 1:
+                head_sec = duration_ms / 1000.0
+                self._head_calibration_ms = duration_ms
+                self.set_head_position(100.0)
+                _LOGGER.info("Head calibration saved: %.1f s", head_sec)
+            elif self._calibration_mode == 2:
+                feet_sec = duration_ms / 1000.0
+                self._feet_calibration_ms = duration_ms
+                self.set_feet_position(100.0)
+                _LOGGER.info("Feet calibration saved: %.1f s", feet_sec)
+            self._calibration_mode = 0
+            self._calibration_active = False
+            await self._stop_calibration_notification()
+            await self.async_move_to_zero()
+            return True, head_sec, feet_sec
+        finally:
+            self._calibration_stopping = False
 
     async def async_move_to_zero(self) -> None:
         """Move head then feet down to 0%% (like YAML move_to_zero script). Single BLE connection per section."""
