@@ -106,7 +106,7 @@ class OctoBedCalibrationElapsedSensor(OctoBedEntity, SensorEntity):
     _attr_name = "Calibration elapsed"
     _attr_unique_id = "calibration_elapsed"
     _attr_icon = "mdi:timer-outline"
-    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self) -> str:
