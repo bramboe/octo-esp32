@@ -20,7 +20,8 @@ BLE_CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 # Handle 0x0011 - kept for import compatibility; use BLE_CHAR_UUID only (handle fails on Bluetooth proxy)
 BLE_CHAR_HANDLE = 0x0011
 
-# Command bytes (from your YAML)
+# Command bytes (from YAML; verified against official app BLE capture)
+# head_up, head_down, feet_up, feet_down, both_up, both_down, stop - all match app
 CMD_STOP = bytes([0x40, 0x02, 0x73, 0x00, 0x00, 0x0B, 0x40])
 CMD_HEAD_UP = bytes([0x40, 0x02, 0x70, 0x00, 0x01, 0x0B, 0x02, 0x40])
 CMD_HEAD_DOWN = bytes([0x40, 0x02, 0x71, 0x00, 0x01, 0x0A, 0x02, 0x40])
@@ -82,6 +83,8 @@ DELAY_AFTER_CONNECT_SEC = 1.0
 
 # Keep-alive interval (same as YAML keep_connection_alive script)
 KEEP_ALIVE_INTERVAL_SEC = 30
+# Shorter interval during calibration/movement (bed may timeout faster when actively moving)
+KEEP_ALIVE_ACTIVE_MOVEMENT_SEC = 20
 
 # Send movement command this often (matches ESPHome 300ms for smooth control)
 MOVEMENT_COMMAND_INTERVAL_SEC = 0.3
