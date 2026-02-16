@@ -147,9 +147,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._head_calibration_ms = int(float(head_sec) * 1000)
         self._feet_calibration_ms = int(float(feet_sec) * 1000)
 
-        # In-memory state (same model as your ESPHome config)
-        self._head_position = 0.0
-        self._feet_position = 0.0
+        # Position state (persisted in options like YAML restore_value)
+        self._head_position = float(entry.options.get("head_position", 0))
+        self._feet_position = float(entry.options.get("feet_position", 0))
         self._light_on = False
         self._movement_active = False
         self._cancel_discovery: Any = None
@@ -222,9 +222,20 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def set_head_position(self, value: float) -> None:
         self._head_position = max(0.0, min(100.0, value))
+        self._persist_position()
+        self.hass.async_create_task(self.async_request_refresh())
 
     def set_feet_position(self, value: float) -> None:
         self._feet_position = max(0.0, min(100.0, value))
+        self._persist_position()
+        self.hass.async_create_task(self.async_request_refresh())
+
+    def _persist_position(self) -> None:
+        """Persist position to config entry options (like YAML restore_value)."""
+        opts = dict(self._entry.options)
+        opts["head_position"] = self._head_position
+        opts["feet_position"] = self._feet_position
+        self.hass.config_entries.async_update_entry(self._entry, options=opts)
 
     def set_light_on(self, value: bool) -> None:
         self._light_on = value
