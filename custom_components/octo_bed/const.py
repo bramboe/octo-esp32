@@ -78,8 +78,9 @@ PIN_RESPONSE_STATUS_BYTE_INDEX = 5
 # Connection timeout per attempt (fast when device responds; retries handle transient failures)
 CONNECT_TIMEOUT = 15.0
 WRITE_TIMEOUT = 5.0
-# Delay after connect before first write (YAML on_connect: "ensure service discovery completes")
-DELAY_AFTER_CONNECT_SEC = 1.0
+# Delay after connect before first write. Reduced from 1.0s for faster response; BleakClientWithServiceCache
+# caches services so reconnects need less discovery time. Increase if commands are ignored.
+DELAY_AFTER_CONNECT_SEC = 0.4
 
 # Keep-alive interval (same as YAML keep_connection_alive script)
 KEEP_ALIVE_INTERVAL_SEC = 30
@@ -89,7 +90,7 @@ KEEP_ALIVE_ACTIVE_MOVEMENT_SEC = 20
 # Send movement command this often (matches ESPHome 300ms for smooth control)
 MOVEMENT_COMMAND_INTERVAL_SEC = 0.3
 # Delay after keep-alive before next command (bed needs brief time to process)
-KEEP_ALIVE_DELAY_SEC = 0.05
+KEEP_ALIVE_DELAY_SEC = 0.02
 # Delay after stop before starting movement (same connection; 250ms for bed to settle)
 DELAY_AFTER_STOP_SAME_CONN_SEC = 0.25
 # Debounce cover slider: wait for user to release before starting movement (prevents stuttering)
