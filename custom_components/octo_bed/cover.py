@@ -110,8 +110,12 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         await super().async_will_remove_from_hass()
 
     async def _run_to_position(self, target: float, is_head: bool) -> None:
-        """Run head or feet to target 0-100 over a single BLE connection (smooth movement)."""
+        """Run head or feet to target 0-100 over a single BLE connection (smooth movement).
+        Stop + delay first (like YAML stop_all_movements + 500ms) for clean state."""
         coordinator = self.coordinator
+        await coordinator.async_send_stop()
+        coordinator.set_movement_active(False)
+        await asyncio.sleep(0.5)
         if is_head:
             current = coordinator.head_position
             cal_ms = coordinator.head_calibration_ms
@@ -192,7 +196,11 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
         await super().async_will_remove_from_hass()
 
     async def _run_to_position(self, target: float, is_head: bool) -> None:
+        """Run feet to target. Stop + delay first (like YAML) for clean state."""
         coordinator = self.coordinator
+        await coordinator.async_send_stop()
+        coordinator.set_movement_active(False)
+        await asyncio.sleep(0.5)
         current = coordinator.feet_position
         cal_ms = coordinator.feet_calibration_ms
         diff = abs(target - current)
