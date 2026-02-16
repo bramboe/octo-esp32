@@ -474,7 +474,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 last_error = e
                 if attempt == 0:
                     _LOGGER.debug("BLE write failed (will retry once): %s", e)
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(1.0)
                 else:
                     _LOGGER.warning("BLE write failed after retry: %s", e)
             finally:
