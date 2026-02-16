@@ -33,6 +33,7 @@ class OctoBedMovementSwitch(OctoBedEntity, SwitchEntity):
     _direction_up = True
     _task: asyncio.Task | None = None
     _stop_event: asyncio.Event | None = None
+    _movement_start_time: float = 0.0
 
     def _get_command(self) -> bytes:
         if self._cal_key == "head":
@@ -45,20 +46,23 @@ class OctoBedMovementSwitch(OctoBedEntity, SwitchEntity):
         if self._stop_event is None:
             self._stop_event = asyncio.Event()
         self._stop_event.clear()
+        self._movement_start_time = self.hass.loop.time()
         self._task = asyncio.create_task(
             self.coordinator.async_run_movement_loop(
                 self._get_command(),
                 self._stop_event.is_set,
             )
         )
+        self._task.add_done_callback(lambda _: self.async_write_ha_state())
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         if self._stop_event:
             self._stop_event.set()
         if self._task:
+            result = None
             try:
-                await asyncio.wait_for(self._task, timeout=5.0)
+                result = await asyncio.wait_for(self._task, timeout=5.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 self._task.cancel()
                 try:
@@ -66,6 +70,12 @@ class OctoBedMovementSwitch(OctoBedEntity, SwitchEntity):
                 except asyncio.CancelledError:
                     pass
             self._task = None
+            duration = self.hass.loop.time() - self._movement_start_time
+            hit_limit = result[1] if result is not None and len(result) == 2 else False
+            if duration > 0.1 and not hit_limit:
+                self.coordinator.update_position_after_switch_movement(
+                    self._get_command(), duration
+                )
         self.async_write_ha_state()
 
     @property
@@ -108,6 +118,7 @@ class OctoBedBothUpSwitch(OctoBedEntity, SwitchEntity):
     _attr_unique_id = "both_up"
     _task: asyncio.Task | None = None
     _stop_event: asyncio.Event | None = None
+    _movement_start_time: float = 0.0
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         if self._task and not self._task.done():
@@ -115,20 +126,23 @@ class OctoBedBothUpSwitch(OctoBedEntity, SwitchEntity):
         if self._stop_event is None:
             self._stop_event = asyncio.Event()
         self._stop_event.clear()
+        self._movement_start_time = self.hass.loop.time()
         self._task = asyncio.create_task(
             self.coordinator.async_run_movement_loop(
                 CMD_BOTH_UP,
                 self._stop_event.is_set,
             )
         )
+        self._task.add_done_callback(lambda _: self.async_write_ha_state())
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         if self._stop_event:
             self._stop_event.set()
         if self._task:
+            result = None
             try:
-                await asyncio.wait_for(self._task, timeout=5.0)
+                result = await asyncio.wait_for(self._task, timeout=5.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 self._task.cancel()
                 try:
@@ -136,6 +150,12 @@ class OctoBedBothUpSwitch(OctoBedEntity, SwitchEntity):
                 except asyncio.CancelledError:
                     pass
             self._task = None
+            duration = self.hass.loop.time() - self._movement_start_time
+            hit_limit = result[1] if result is not None and len(result) == 2 else False
+            if duration > 0.1 and not hit_limit:
+                self.coordinator.update_position_after_switch_movement(
+                    CMD_BOTH_UP, duration
+                )
         self.async_write_ha_state()
 
     @property
@@ -150,6 +170,7 @@ class OctoBedBothDownSwitch(OctoBedEntity, SwitchEntity):
     _attr_unique_id = "both_down"
     _task: asyncio.Task | None = None
     _stop_event: asyncio.Event | None = None
+    _movement_start_time: float = 0.0
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         if self._task and not self._task.done():
@@ -157,20 +178,23 @@ class OctoBedBothDownSwitch(OctoBedEntity, SwitchEntity):
         if self._stop_event is None:
             self._stop_event = asyncio.Event()
         self._stop_event.clear()
+        self._movement_start_time = self.hass.loop.time()
         self._task = asyncio.create_task(
             self.coordinator.async_run_movement_loop(
                 CMD_BOTH_DOWN,
                 self._stop_event.is_set,
             )
         )
+        self._task.add_done_callback(lambda _: self.async_write_ha_state())
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         if self._stop_event:
             self._stop_event.set()
         if self._task:
+            result = None
             try:
-                await asyncio.wait_for(self._task, timeout=5.0)
+                result = await asyncio.wait_for(self._task, timeout=5.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 self._task.cancel()
                 try:
@@ -178,6 +202,12 @@ class OctoBedBothDownSwitch(OctoBedEntity, SwitchEntity):
                 except asyncio.CancelledError:
                     pass
             self._task = None
+            duration = self.hass.loop.time() - self._movement_start_time
+            hit_limit = result[1] if result is not None and len(result) == 2 else False
+            if duration > 0.1 and not hit_limit:
+                self.coordinator.update_position_after_switch_movement(
+                    CMD_BOTH_DOWN, duration
+                )
         self.async_write_ha_state()
 
     @property
