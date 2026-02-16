@@ -35,6 +35,7 @@ from .const import (
     DEFAULT_FEET_CALIBRATION_SEC,
     DEFAULT_HEAD_CALIBRATION_SEC,
     KEEP_ALIVE_DELAY_SEC,
+    KEEP_ALIVE_ACTIVE_MOVEMENT_SEC,
     KEEP_ALIVE_INTERVAL_SEC,
     KEEP_ALIVE_PREFIX,
     KEEP_ALIVE_SUFFIX,
@@ -732,7 +733,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         command: bytes,
         is_cancelled: Callable[[], bool],
     ) -> None:
-        """Send movement command every 300ms until cancelled (matches ESPHome YAML)."""
+        """Send movement command every 300ms until cancelled (matches ESPHome YAML).
+        Periodic keep-alive every 30s prevents bed timeout for smooth continuous movement."""
         ble_device = self._get_ble_device()
         if not ble_device:
             self.set_movement_active(False)
@@ -752,8 +754,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 client, _make_keep_alive(self.pin), response=False
             )
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+            last_keep_alive = self.hass.loop.time()
             while not is_cancelled():
                 await _write_gatt_char_flexible(client, command, response=False)
+                now = self.hass.loop.time()
+                if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
+                    await _write_gatt_char_flexible(
+                        client, _make_keep_alive(self.pin), response=False
+                    )
+                    last_keep_alive = now
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
@@ -803,8 +812,13 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
             end_ts = self.hass.loop.time() + duration_sec
+            last_keep_alive = self.hass.loop.time()
             while self.hass.loop.time() < end_ts:
                 await _write_gatt_char_flexible(client, command, response=False)
+                now = self.hass.loop.time()
+                if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
+                    await _write_gatt_char_flexible(client, keep_alive, response=False)
+                    last_keep_alive = now
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
@@ -901,9 +915,14 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Clear discovered address so next refresh will rediscover (like YAML Reset BLE Connection)."""
         self._device_address = None
 
+    def _get_ble_device_for_reconnect(self):
+        """Fresh BLE device ref for reconnects (avoids stale proxy cache)."""
+        return self._get_ble_device()
+
     async def _calibration_loop(self, head: bool) -> None:
         """Same as Head Up / Feet Up switch: keep-alive, then CMD_HEAD_UP or CMD_FEET_UP every 300ms until stop.
         Reconnects on BLE error so calibration continues until user presses stop.
+        Uses fresh device ref and service cache disabled for stable proxy reconnects.
         """
         command = CMD_HEAD_UP if head else CMD_FEET_UP
         stop_event = self._calibration_stop_event
@@ -927,6 +946,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._device_name or "Octo Bed",
                     disconnected_callback=None,
                     timeout=CONNECT_TIMEOUT,
+                    max_attempts=3,
+                    use_services_cache=False,
+                    ble_device_callback=self._get_ble_device_for_reconnect,
                 )
                 await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
                 await _write_gatt_char_flexible(
@@ -939,7 +961,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         client, command, response=False
                     )
                     now = self.hass.loop.time()
-                    if now - last_keep_alive >= KEEP_ALIVE_INTERVAL_SEC:
+                    if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
                         await _write_gatt_char_flexible(
                             client, _make_keep_alive(self.pin), response=False
                         )
@@ -971,7 +993,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     pass
                 if stop_event.is_set():
                     break
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.5)
             finally:
                 if client:
                     await client.disconnect()
