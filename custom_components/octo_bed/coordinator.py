@@ -474,7 +474,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 last_error = e
                 if attempt == 0:
                     _LOGGER.debug("BLE write failed (will retry once): %s", e)
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.5)
                 else:
                     _LOGGER.warning("BLE write failed after retry: %s", e)
             finally:
@@ -728,19 +728,56 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_send_both_down(self) -> bool:
         return await self._send_command(CMD_BOTH_DOWN)
 
+    def update_position_after_switch_movement(
+        self, command: bytes, duration_sec: float
+    ) -> None:
+        """Update estimated head/feet position after switch movement.
+        Bed does not report position over BLE; we estimate from movement duration vs calibration time."""
+        if duration_sec <= 0:
+            return
+        head_cal_sec = self.head_calibration_ms / 1000.0
+        feet_cal_sec = self.feet_calibration_ms / 1000.0
+        if command == CMD_HEAD_UP:
+            delta = min(100.0, (duration_sec / max(0.1, head_cal_sec)) * 100.0)
+            self.set_head_position(self._head_position + delta)
+        elif command == CMD_HEAD_DOWN:
+            delta = min(100.0, (duration_sec / max(0.1, head_cal_sec)) * 100.0)
+            self.set_head_position(self._head_position - delta)
+        elif command == CMD_FEET_UP:
+            delta = min(100.0, (duration_sec / max(0.1, feet_cal_sec)) * 100.0)
+            self.set_feet_position(self._feet_position + delta)
+        elif command == CMD_FEET_DOWN:
+            delta = min(100.0, (duration_sec / max(0.1, feet_cal_sec)) * 100.0)
+            self.set_feet_position(self._feet_position - delta)
+        elif command == CMD_BOTH_UP:
+            both_cal = max(head_cal_sec, feet_cal_sec)
+            delta_both = min(100.0, (duration_sec / max(0.1, both_cal)) * 100.0)
+            self.set_head_position(self._head_position + delta_both)
+            self.set_feet_position(self._feet_position + delta_both)
+        elif command == CMD_BOTH_DOWN:
+            both_cal = max(head_cal_sec, feet_cal_sec)
+            delta_both = min(100.0, (duration_sec / max(0.1, both_cal)) * 100.0)
+            self.set_head_position(self._head_position - delta_both)
+            self.set_feet_position(self._feet_position - delta_both)
+        self.async_request_refresh()
+
     async def async_run_movement_loop(
         self,
         command: bytes,
         is_cancelled: Callable[[], bool],
-    ) -> None:
-        """Send movement command every 300ms until cancelled (matches ESPHome YAML).
-        Periodic keep-alive every 30s prevents bed timeout for smooth continuous movement."""
+    ) -> tuple[float, bool]:
+        """Send movement command every 300ms until cancelled or position limit reached.
+        Returns (duration_sec, hit_limit). When hit_limit is True, position was set to 100%/0%."""
         ble_device = self._get_ble_device()
         if not ble_device:
             self.set_movement_active(False)
-            return
+            return (0.0, False)
         self.set_movement_active(True)
         client = None
+        start_time = self.hass.loop.time()
+        hit_limit = False
+        head_cal_sec = self.head_calibration_ms / 1000.0
+        feet_cal_sec = self.feet_calibration_ms / 1000.0
         try:
             client = await establish_connection(
                 BleakClientWithServiceCache,
@@ -756,6 +793,51 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
             last_keep_alive = self.hass.loop.time()
             while not is_cancelled():
+                elapsed = self.hass.loop.time() - start_time
+                if command in (CMD_HEAD_UP, CMD_FEET_UP, CMD_BOTH_UP):
+                    if command == CMD_HEAD_UP:
+                        est = self._head_position + (elapsed / max(0.1, head_cal_sec)) * 100.0
+                    elif command == CMD_FEET_UP:
+                        est = self._feet_position + (elapsed / max(0.1, feet_cal_sec)) * 100.0
+                    else:
+                        both_cal = max(head_cal_sec, feet_cal_sec)
+                        delta = (elapsed / max(0.1, both_cal)) * 100.0
+                        est = min(
+                            self._head_position + delta,
+                            self._feet_position + delta,
+                        )
+                    if est >= 100.0:
+                        if command == CMD_HEAD_UP:
+                            self.set_head_position(100.0)
+                        elif command == CMD_FEET_UP:
+                            self.set_feet_position(100.0)
+                        else:
+                            self.set_head_position(100.0)
+                            self.set_feet_position(100.0)
+                        hit_limit = True
+                        break
+                else:
+                    if command == CMD_HEAD_DOWN:
+                        est = self._head_position - (elapsed / max(0.1, head_cal_sec)) * 100.0
+                    elif command == CMD_FEET_DOWN:
+                        est = self._feet_position - (elapsed / max(0.1, feet_cal_sec)) * 100.0
+                    else:
+                        both_cal = max(head_cal_sec, feet_cal_sec)
+                        delta = (elapsed / max(0.1, both_cal)) * 100.0
+                        est = max(
+                            self._head_position - delta,
+                            self._feet_position - delta,
+                        )
+                    if est <= 0.0:
+                        if command == CMD_HEAD_DOWN:
+                            self.set_head_position(0.0)
+                        elif command == CMD_FEET_DOWN:
+                            self.set_feet_position(0.0)
+                        else:
+                            self.set_head_position(0.0)
+                            self.set_feet_position(0.0)
+                        hit_limit = True
+                        break
                 await _write_gatt_char_flexible(client, command, response=False)
                 now = self.hass.loop.time()
                 if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
@@ -767,6 +849,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+            if hit_limit:
+                self.async_request_refresh()
         except asyncio.CancelledError:
             await self._send_command(CMD_STOP)
             raise
@@ -777,6 +861,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if client:
                 await client.disconnect()
             self.set_movement_active(False)
+        duration = self.hass.loop.time() - start_time
+        return (duration, hit_limit)
 
     async def async_run_movement_for_duration(
         self, command: bytes, duration_sec: float
