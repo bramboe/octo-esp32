@@ -17,6 +17,7 @@ from .const import (
     BLE_CHAR_UUID,
     CMD_APP_INIT,
     CONF_DEVICE_ADDRESS,
+    DELAY_AFTER_CONNECT_CALIBRATION_SEC,
     DELAY_AFTER_CONNECT_SEC,
     DELAY_AFTER_STOP_SAME_CONN_SEC,
     DOMAIN,
@@ -87,8 +88,17 @@ def _make_set_pin(pin: str) -> bytes:
 async def _write_gatt_char_flexible(
     client: Any, data: bytes, response: bool = False
 ) -> None:
-    """Write to FFE1 characteristic (Handle 0x0011 per captures). Use UUID only - handle fallback fails on some proxies ('Characteristic 17 was not found')."""
-    await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
+    """Write to FFE1 characteristic (Handle 0x0011 per captures). Use UUID only - handle fallback fails on some proxies ('Characteristic 17 was not found').
+    Retries once on 'characteristic not found' – Bluetooth proxy sometimes needs a moment for GATT enumeration."""
+    try:
+        await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
+    except Exception as e:
+        err = str(e).lower()
+        if "not found" in err and "characteristic" in err:
+            await asyncio.sleep(1.0)
+            await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
+        else:
+            raise
 
 
 def _find_char_specifier(client: Any) -> str:
@@ -1123,7 +1133,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     use_services_cache=False,
                     ble_device_callback=self._get_ble_device_for_reconnect,
                 )
-                await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
+                await asyncio.sleep(DELAY_AFTER_CONNECT_CALIBRATION_SEC)
                 await _write_gatt_char_flexible(
                     client, self._get_auth_command(), response=False
                 )
@@ -1170,7 +1180,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     pass
                 if stop_event.is_set():
                     break
-                await asyncio.sleep(0.5)
+                err = str(e).lower()
+                backoff = 4.0 if "characteristic" in err and "not found" in err else 0.5
+                await asyncio.sleep(backoff)
             finally:
                 await _safe_disconnect(client)
         await self._send_command(CMD_STOP)
