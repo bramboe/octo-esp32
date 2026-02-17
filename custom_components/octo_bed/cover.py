@@ -141,7 +141,7 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
                     set_pos(target)
                     break
                 if attempt == 0:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.5)
             self.async_write_ha_state()
         finally:
             coordinator.set_movement_active(False)
@@ -226,7 +226,7 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
                     coordinator.set_feet_position(target)
                     break
                 if attempt == 0:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.5)
             self.async_write_ha_state()
         finally:
             coordinator.set_movement_active(False)
@@ -376,7 +376,7 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
                 if all_ok or (head_diff < 0.5 and feet_diff < 0.5):
                     break
                 if attempt == 0:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.5)
             self.async_write_ha_state()
         finally:
             coordinator.set_movement_active(False)
