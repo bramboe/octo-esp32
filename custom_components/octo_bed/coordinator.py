@@ -25,6 +25,7 @@ from .const import (
     CONF_DEVICE_NICKNAME,
     CONNECT_TIMEOUT,
     COOLDOWN_AFTER_MOVEMENT_SEC,
+    DELAY_BEFORE_DISCONNECT_AFTER_MOVEMENT_SEC,
     CMD_BOTH_DOWN,
     CMD_BOTH_UP,
     CMD_FEET_DOWN,
@@ -1170,6 +1171,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     _LOGGER.warning("Movement-until-target BLE error: %s", e)
                     return False
         finally:
+            if client is not None:
+                await asyncio.sleep(DELAY_BEFORE_DISCONNECT_AFTER_MOVEMENT_SEC)
             await _safe_disconnect(client)
             self.set_movement_active(False)
             self._last_movement_end_time = self.hass.loop.time()
