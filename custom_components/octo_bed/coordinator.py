@@ -110,6 +110,17 @@ async def _stop_notify_flexible(client: Any) -> None:
         pass
 
 
+async def _safe_disconnect(client: Any) -> None:
+    """Disconnect BLE client. Only disconnect when connected to avoid 'Removing a non-existing connecting' from Bluetooth proxy."""
+    if client is None:
+        return
+    try:
+        if client.is_connected:
+            await client.disconnect()
+    except Exception:
+        pass
+
+
 def _parse_pin_response(data: bytes) -> bool | None:
     """Parse bed notification after keep-alive. True = PIN accepted (0x1A), False = rejected (0x18, 0x1b, 0x00, 0x1f), None = unknown.
     Accepts 40 21 ... or 46 21 ... prefix; status at index 5 or last byte. 0x1f = no PIN set (e.g. after hard reset)."""
@@ -397,8 +408,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("PIN check failed: %s", e)
             return False
         finally:
-            if client:
-                await client.disconnect()
+            await _safe_disconnect(client)
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Ensure we have a device address and verify PIN is accepted for 'connected' state."""
@@ -530,8 +540,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else:
                     _LOGGER.warning("BLE write failed after retry: %s", e)
             finally:
-                if client:
-                    await client.disconnect()
+                await _safe_disconnect(client)
         return False
 
     async def _send_command_and_capture_notification(self, data: bytes, wait_s: float = 2.5) -> bool:
@@ -579,8 +588,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Send and capture failed: %s", e)
             return False
         finally:
-            if client:
-                await client.disconnect()
+            await _safe_disconnect(client)
 
     async def async_send_stop(self) -> bool:
         """Send stop command twice (ESPHome pattern for reliability). Single connection to reduce latency."""
@@ -608,8 +616,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("async_send_stop failed: %s", e)
             return False
         finally:
-            if client:
-                await client.disconnect()
+            await _safe_disconnect(client)
 
     async def async_send_make_discoverable(self) -> bool:
         """Send make-discoverable command twice (like pressing hub button 2× = teach remote)."""
@@ -757,8 +764,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("Set PIN on device failed: %s", e)
             return False
         finally:
-            if client:
-                await client.disconnect()
+            await _safe_disconnect(client)
 
     async def async_send_head_up(self) -> bool:
         return await self._send_command(CMD_HEAD_UP)
@@ -911,8 +917,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("Movement loop BLE error: %s", e)
             await self._send_command(CMD_STOP)
         finally:
-            if client:
-                await client.disconnect()
+            await _safe_disconnect(client)
             self.set_movement_active(False)
             self._last_movement_end_time = self.hass.loop.time()
         duration = self.hass.loop.time() - start_time
@@ -997,8 +1002,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._send_command(CMD_STOP)
             return False
         finally:
-            if client:
-                await client.disconnect()
+            await _safe_disconnect(client)
             self.set_movement_active(False)
             self._last_movement_end_time = self.hass.loop.time()
 
@@ -1121,9 +1125,13 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
                 await _write_gatt_char_flexible(
-                    client, _make_keep_alive(self.pin), response=False
+                    client, self._get_auth_command(), response=False
                 )
                 await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
+                await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                await asyncio.sleep(0.1)
                 last_keep_alive = self.hass.loop.time()
                 while not stop_event.is_set():
                     await _write_gatt_char_flexible(
@@ -1164,8 +1172,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     break
                 await asyncio.sleep(0.5)
             finally:
-                if client:
-                    await client.disconnect()
+                await _safe_disconnect(client)
         await self._send_command(CMD_STOP)
 
     def _calibration_notification_id(self) -> str:
@@ -1459,8 +1466,7 @@ async def probe_device_validates_pin(
         _LOGGER.debug("Probe failed: %s", e)
         return False
     finally:
-        if client:
-            await client.disconnect()
+        await _safe_disconnect(client)
 
 
 async def validate_pin_with_probe(
@@ -1596,8 +1602,7 @@ async def validate_pin(
         _LOGGER.warning("PIN validation failed for %s: %s", addr, e)
         return "connection_failed"
     finally:
-        if client:
-            await client.disconnect()
+        await _safe_disconnect(client)
 
 
 async def send_single_command(
@@ -1640,8 +1645,7 @@ async def send_single_command(
             _LOGGER.warning("BLE write failed: %s", e)
         return False
     finally:
-        if client:
-            await client.disconnect()
+        await _safe_disconnect(client)
 
 
 async def _standalone_calibration_loop(
@@ -1692,8 +1696,7 @@ async def _standalone_calibration_loop(
         else:
             _LOGGER.warning("Calibration loop error: %s", e)
     finally:
-        if client:
-            await client.disconnect()
+        await _safe_disconnect(client)
         tasks = _standalone_calibration_tasks(hass)
         tasks.pop(_normalize_addr(addr), None)
 
