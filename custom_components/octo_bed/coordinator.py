@@ -985,7 +985,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     start_feet = self._feet_position
                     head_cal_sec = self.head_calibration_ms / 1000.0
                     feet_cal_sec = self.feet_calibration_ms / 1000.0
-                    last_keep_alive = start_time
                     while self.hass.loop.time() < end_ts:
                         await _write_gatt_char_flexible(client, command, response=False)
                         now = self.hass.loop.time()
@@ -1012,9 +1011,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             delta = (elapsed / max(0.1, both_cal)) * 100.0
                             self.set_head_position(max(0.0, start_head - delta), persist=False)
                             self.set_feet_position(max(0.0, start_feet - delta), persist=False)
-                        if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
-                            await _write_gatt_char_flexible(client, auth_cmd, response=False)
-                            last_keep_alive = now
                         await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
                     await _write_gatt_char_flexible(client, CMD_STOP, response=False)
                     await asyncio.sleep(0.1)
