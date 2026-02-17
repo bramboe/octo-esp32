@@ -800,7 +800,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             delta_both = min(100.0, (duration_sec / max(0.1, both_cal)) * 100.0)
             self.set_head_position(self._head_position - delta_both)
             self.set_feet_position(self._feet_position - delta_both)
-        self.async_request_refresh()
 
     async def async_run_movement_loop(
         self,
