@@ -112,36 +112,39 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
     async def _run_to_position(self, target: float, is_head: bool) -> None:
         """Run head or feet to target 0-100 over a single BLE connection (smooth movement).
         Stop + delay first (like YAML stop_all_movements + 500ms) for clean state.
-        Retries once on BLE failure (connection often drops partway through)."""
+        Retries once on BLE failure (connection often drops partway through).
+        Keeps movement_active=True for the whole operation so coordinator skips BLE checks (avoids 'connection unavailable')."""
         coordinator = self.coordinator
-        await coordinator.async_send_stop()
-        coordinator.set_movement_active(False)
-        await asyncio.sleep(0.5)
-        for attempt in range(2):
-            if is_head:
-                current = coordinator.head_position
-                cal_ms = coordinator.head_calibration_ms
-                command = CMD_HEAD_UP if target > current else CMD_HEAD_DOWN
-                set_pos = coordinator.set_head_position
-            else:
-                current = coordinator.feet_position
-                cal_ms = coordinator.feet_calibration_ms
-                command = CMD_FEET_UP if target > current else CMD_FEET_DOWN
-                set_pos = coordinator.set_feet_position
-            diff = abs(target - current)
-            if diff < 0.5:
-                return
-            # 100% travel = full calibration time (cal_ms)
-            duration_ms = int((diff / 100.0) * cal_ms)
-            duration_ms = max(300, min(cal_ms, duration_ms))
-            duration_sec = duration_ms / 1000.0
-            ok = await coordinator.async_run_movement_for_duration(command, duration_sec)
-            if ok:
-                set_pos(target)
-                break
-            if attempt == 0:
-                await asyncio.sleep(2.0)  # Let device recover before retry
-        self.async_write_ha_state()
+        coordinator.set_movement_active(True)
+        try:
+            await coordinator.async_send_stop()
+            await asyncio.sleep(0.5)
+            for attempt in range(2):
+                if is_head:
+                    current = coordinator.head_position
+                    cal_ms = coordinator.head_calibration_ms
+                    command = CMD_HEAD_UP if target > current else CMD_HEAD_DOWN
+                    set_pos = coordinator.set_head_position
+                else:
+                    current = coordinator.feet_position
+                    cal_ms = coordinator.feet_calibration_ms
+                    command = CMD_FEET_UP if target > current else CMD_FEET_DOWN
+                    set_pos = coordinator.set_feet_position
+                diff = abs(target - current)
+                if diff < 0.5:
+                    return
+                duration_ms = int((diff / 100.0) * cal_ms)
+                duration_ms = max(300, min(cal_ms, duration_ms))
+                duration_sec = duration_ms / 1000.0
+                ok = await coordinator.async_run_movement_for_duration(command, duration_sec)
+                if ok:
+                    set_pos(target)
+                    break
+                if attempt == 0:
+                    await asyncio.sleep(2.0)
+            self.async_write_ha_state()
+        finally:
+            coordinator.set_movement_active(False)
 
 
 class OctoBedFeetCoverEntity(OctoBedCoverEntity):
@@ -201,28 +204,32 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
         await super().async_will_remove_from_hass()
 
     async def _run_to_position(self, target: float, is_head: bool) -> None:
-        """Run feet to target. Stop + delay first (like YAML). Retries once on BLE failure."""
+        """Run feet to target. Stop + delay first (like YAML). Retries once on BLE failure.
+        Keeps movement_active=True for the whole operation so coordinator skips BLE checks."""
         coordinator = self.coordinator
-        await coordinator.async_send_stop()
-        coordinator.set_movement_active(False)
-        await asyncio.sleep(0.5)
-        for attempt in range(2):
-            current = coordinator.feet_position
-            cal_ms = coordinator.feet_calibration_ms
-            diff = abs(target - current)
-            if diff < 0.5:
-                return
-            duration_ms = int((diff / 100.0) * cal_ms)
-            duration_ms = max(300, min(cal_ms, duration_ms))
-            duration_sec = duration_ms / 1000.0
-            command = CMD_FEET_UP if target > current else CMD_FEET_DOWN
-            ok = await coordinator.async_run_movement_for_duration(command, duration_sec)
-            if ok:
-                coordinator.set_feet_position(target)
-                break
-            if attempt == 0:
-                await asyncio.sleep(2.0)
-        self.async_write_ha_state()
+        coordinator.set_movement_active(True)
+        try:
+            await coordinator.async_send_stop()
+            await asyncio.sleep(0.5)
+            for attempt in range(2):
+                current = coordinator.feet_position
+                cal_ms = coordinator.feet_calibration_ms
+                diff = abs(target - current)
+                if diff < 0.5:
+                    return
+                duration_ms = int((diff / 100.0) * cal_ms)
+                duration_ms = max(300, min(cal_ms, duration_ms))
+                duration_sec = duration_ms / 1000.0
+                command = CMD_FEET_UP if target > current else CMD_FEET_DOWN
+                ok = await coordinator.async_run_movement_for_duration(command, duration_sec)
+                if ok:
+                    coordinator.set_feet_position(target)
+                    break
+                if attempt == 0:
+                    await asyncio.sleep(2.0)
+            self.async_write_ha_state()
+        finally:
+            coordinator.set_movement_active(False)
 
 
 class OctoBedBothCoverEntity(OctoBedCoverEntity):
@@ -286,89 +293,93 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
     async def _run_both_to_position(self, target: float) -> None:
         """Move both sections to target. Never combines movement commands (per YAML).
         Same direction: phase 1 = both_up/down until faster section done; phase 2 = head or feet only.
-        Different directions: sequential head then feet (never alternating). Retries once on BLE failure."""
-        await self.coordinator.async_send_stop()
-        self.coordinator.set_movement_active(False)
-        await asyncio.sleep(0.5)
+        Different directions: sequential head then feet (never alternating). Retries once on BLE failure.
+        Keeps movement_active=True for the whole operation so coordinator skips BLE checks."""
         coordinator = self.coordinator
-        for attempt in range(2):
-            head_current = coordinator.head_position
-            feet_current = coordinator.feet_position
-            head_diff = abs(target - head_current)
-            feet_diff = abs(target - feet_current)
-            head_duration_sec = (head_diff / 100.0) * (coordinator.head_calibration_ms / 1000.0) if head_diff >= 0.5 else 0.0
-            feet_duration_sec = (feet_diff / 100.0) * (coordinator.feet_calibration_ms / 1000.0) if feet_diff >= 0.5 else 0.0
-            head_duration_sec = max(0.3, head_duration_sec)
-            feet_duration_sec = max(0.3, feet_duration_sec)
-            all_ok = True
-            if target > head_current and target > feet_current:
-                phase1 = min(head_duration_sec, feet_duration_sec)
-                ok = await coordinator.async_run_movement_for_duration(CMD_BOTH_UP, phase1)
-                if not ok:
-                    all_ok = False
-                else:
-                    head_remaining = head_duration_sec - phase1
-                    feet_remaining = feet_duration_sec - phase1
-                    if head_remaining > 0.1:
-                        await asyncio.sleep(0.5)
-                        ok = await coordinator.async_run_movement_for_duration(CMD_HEAD_UP, head_remaining)
-                    elif feet_remaining > 0.1:
-                        await asyncio.sleep(0.5)
-                        ok = await coordinator.async_run_movement_for_duration(CMD_FEET_UP, feet_remaining)
+        coordinator.set_movement_active(True)
+        try:
+            await coordinator.async_send_stop()
+            await asyncio.sleep(0.5)
+            for attempt in range(2):
+                head_current = coordinator.head_position
+                feet_current = coordinator.feet_position
+                head_diff = abs(target - head_current)
+                feet_diff = abs(target - feet_current)
+                head_duration_sec = (head_diff / 100.0) * (coordinator.head_calibration_ms / 1000.0) if head_diff >= 0.5 else 0.0
+                feet_duration_sec = (feet_diff / 100.0) * (coordinator.feet_calibration_ms / 1000.0) if feet_diff >= 0.5 else 0.0
+                head_duration_sec = max(0.3, head_duration_sec)
+                feet_duration_sec = max(0.3, feet_duration_sec)
+                all_ok = True
+                if target > head_current and target > feet_current:
+                    phase1 = min(head_duration_sec, feet_duration_sec)
+                    ok = await coordinator.async_run_movement_for_duration(CMD_BOTH_UP, phase1)
+                    if not ok:
+                        all_ok = False
                     else:
-                        ok = True
-                    if ok:
+                        head_remaining = head_duration_sec - phase1
+                        feet_remaining = feet_duration_sec - phase1
+                        if head_remaining > 0.1:
+                            await asyncio.sleep(0.5)
+                            ok = await coordinator.async_run_movement_for_duration(CMD_HEAD_UP, head_remaining)
+                        elif feet_remaining > 0.1:
+                            await asyncio.sleep(0.5)
+                            ok = await coordinator.async_run_movement_for_duration(CMD_FEET_UP, feet_remaining)
+                        else:
+                            ok = True
+                        if ok:
+                            coordinator.set_head_position(target)
+                            coordinator.set_feet_position(target)
+                        else:
+                            all_ok = False
+                elif target < head_current and target < feet_current:
+                    phase1 = min(head_duration_sec, feet_duration_sec)
+                    ok = await coordinator.async_run_movement_for_duration(CMD_BOTH_DOWN, phase1)
+                    if not ok:
+                        all_ok = False
+                    else:
+                        head_remaining = head_duration_sec - phase1
+                        feet_remaining = feet_duration_sec - phase1
+                        if head_remaining > 0.1:
+                            await asyncio.sleep(0.5)
+                            ok = await coordinator.async_run_movement_for_duration(CMD_HEAD_DOWN, head_remaining)
+                        elif feet_remaining > 0.1:
+                            await asyncio.sleep(0.5)
+                            ok = await coordinator.async_run_movement_for_duration(CMD_FEET_DOWN, feet_remaining)
+                        else:
+                            ok = True
+                        if ok:
+                            coordinator.set_head_position(target)
+                            coordinator.set_feet_position(target)
+                        else:
+                            all_ok = False
+                else:
+                    if head_diff >= 0.5:
+                        cmd = CMD_HEAD_UP if target > head_current else CMD_HEAD_DOWN
+                        head_ok = await coordinator.async_run_movement_for_duration(
+                            cmd, head_duration_sec
+                        )
+                    else:
+                        head_ok = True
+                    if feet_diff >= 0.5:
+                        await asyncio.sleep(0.5)
+                        cmd = CMD_FEET_UP if target > feet_current else CMD_FEET_DOWN
+                        feet_ok = await coordinator.async_run_movement_for_duration(
+                            cmd, feet_duration_sec
+                        )
+                    else:
+                        feet_ok = True
+                    if head_ok and feet_ok:
                         coordinator.set_head_position(target)
                         coordinator.set_feet_position(target)
                     else:
                         all_ok = False
-            elif target < head_current and target < feet_current:
-                phase1 = min(head_duration_sec, feet_duration_sec)
-                ok = await coordinator.async_run_movement_for_duration(CMD_BOTH_DOWN, phase1)
-                if not ok:
-                    all_ok = False
-                else:
-                    head_remaining = head_duration_sec - phase1
-                    feet_remaining = feet_duration_sec - phase1
-                    if head_remaining > 0.1:
-                        await asyncio.sleep(0.5)
-                        ok = await coordinator.async_run_movement_for_duration(CMD_HEAD_DOWN, head_remaining)
-                    elif feet_remaining > 0.1:
-                        await asyncio.sleep(0.5)
-                        ok = await coordinator.async_run_movement_for_duration(CMD_FEET_DOWN, feet_remaining)
-                    else:
-                        ok = True
-                    if ok:
-                        coordinator.set_head_position(target)
-                        coordinator.set_feet_position(target)
-                    else:
-                        all_ok = False
-            else:
-                if head_diff >= 0.5:
-                    cmd = CMD_HEAD_UP if target > head_current else CMD_HEAD_DOWN
-                    head_ok = await coordinator.async_run_movement_for_duration(
-                        cmd, head_duration_sec
-                    )
-                else:
-                    head_ok = True
-                if feet_diff >= 0.5:
-                    await asyncio.sleep(0.5)
-                    cmd = CMD_FEET_UP if target > feet_current else CMD_FEET_DOWN
-                    feet_ok = await coordinator.async_run_movement_for_duration(
-                        cmd, feet_duration_sec
-                    )
-                else:
-                    feet_ok = True
-                if head_ok and feet_ok:
-                    coordinator.set_head_position(target)
-                    coordinator.set_feet_position(target)
-                else:
-                    all_ok = False
-            if all_ok or (head_diff < 0.5 and feet_diff < 0.5):
-                break
-            if attempt == 0:
-                await asyncio.sleep(2.0)
-        self.async_write_ha_state()
+                if all_ok or (head_diff < 0.5 and feet_diff < 0.5):
+                    break
+                if attempt == 0:
+                    await asyncio.sleep(2.0)
+            self.async_write_ha_state()
+        finally:
+            coordinator.set_movement_active(False)
 
 
 async def async_setup_entry(
