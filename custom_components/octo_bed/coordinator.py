@@ -525,7 +525,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.debug("Octo Bed: no address configured, skipping BLE command")
             return False
         auth_cmd = self._get_auth_command()
-        last_error = None
         for attempt in range(2):
             client = None
             try:
@@ -535,18 +534,21 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._device_name or "Octo Bed",
                     disconnected_callback=None,
                     timeout=CONNECT_TIMEOUT,
+                    use_services_cache=False,
+                    ble_device_callback=self._get_ble_device_for_reconnect,
                 )
-                await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
+                await asyncio.sleep(DELAY_AFTER_CONNECT_CALIBRATION_SEC)
                 if data != auth_cmd:
                     await _write_gatt_char_flexible(client, auth_cmd, response=False)
                     await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
                 await _write_gatt_char_flexible(client, data, response=False)
                 return True
             except Exception as e:
-                last_error = e
+                err = str(e).lower()
                 if attempt == 0:
                     _LOGGER.debug("BLE write failed (will retry once): %s", e)
-                    await asyncio.sleep(1.0)
+                    backoff = 4.0 if "characteristic" in err and "not found" in err else 1.0
+                    await asyncio.sleep(backoff)
                 else:
                     _LOGGER.warning("BLE write failed after retry: %s", e)
             finally:
