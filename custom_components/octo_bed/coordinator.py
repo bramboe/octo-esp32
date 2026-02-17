@@ -223,14 +223,16 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return max(1000, min(120000, int(float(sec) * 1000)))
 
-    def set_head_position(self, value: float) -> None:
+    def set_head_position(self, value: float, *, persist: bool = True) -> None:
         self._head_position = max(0.0, min(100.0, value))
-        self._persist_position()
+        if persist:
+            self._persist_position()
         self.hass.async_create_task(self.async_request_refresh())
 
-    def set_feet_position(self, value: float) -> None:
+    def set_feet_position(self, value: float, *, persist: bool = True) -> None:
         self._feet_position = max(0.0, min(100.0, value))
-        self._persist_position()
+        if persist:
+            self._persist_position()
         self.hass.async_create_task(self.async_request_refresh())
 
     def _persist_position(self) -> None:
@@ -803,6 +805,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.set_movement_active(True)
         client = None
         start_time = self.hass.loop.time()
+        start_head = self._head_position
+        start_feet = self._feet_position
         hit_limit = False
         head_cal_sec = self.head_calibration_ms / 1000.0
         feet_cal_sec = self.feet_calibration_ms / 1000.0
@@ -824,16 +828,17 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 elapsed = self.hass.loop.time() - start_time
                 if command in (CMD_HEAD_UP, CMD_FEET_UP, CMD_BOTH_UP):
                     if command == CMD_HEAD_UP:
-                        est = self._head_position + (elapsed / max(0.1, head_cal_sec)) * 100.0
+                        est = start_head + (elapsed / max(0.1, head_cal_sec)) * 100.0
+                        self.set_head_position(min(100.0, est), persist=False)
                     elif command == CMD_FEET_UP:
-                        est = self._feet_position + (elapsed / max(0.1, feet_cal_sec)) * 100.0
+                        est = start_feet + (elapsed / max(0.1, feet_cal_sec)) * 100.0
+                        self.set_feet_position(min(100.0, est), persist=False)
                     else:
                         both_cal = max(head_cal_sec, feet_cal_sec)
                         delta = (elapsed / max(0.1, both_cal)) * 100.0
-                        est = min(
-                            self._head_position + delta,
-                            self._feet_position + delta,
-                        )
+                        est = min(start_head + delta, start_feet + delta)
+                        self.set_head_position(min(100.0, start_head + delta), persist=False)
+                        self.set_feet_position(min(100.0, start_feet + delta), persist=False)
                     if est >= 100.0:
                         if command == CMD_HEAD_UP:
                             self.set_head_position(100.0)
@@ -846,16 +851,17 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         break
                 else:
                     if command == CMD_HEAD_DOWN:
-                        est = self._head_position - (elapsed / max(0.1, head_cal_sec)) * 100.0
+                        est = start_head - (elapsed / max(0.1, head_cal_sec)) * 100.0
+                        self.set_head_position(max(0.0, est), persist=False)
                     elif command == CMD_FEET_DOWN:
-                        est = self._feet_position - (elapsed / max(0.1, feet_cal_sec)) * 100.0
+                        est = start_feet - (elapsed / max(0.1, feet_cal_sec)) * 100.0
+                        self.set_feet_position(max(0.0, est), persist=False)
                     else:
                         both_cal = max(head_cal_sec, feet_cal_sec)
                         delta = (elapsed / max(0.1, both_cal)) * 100.0
-                        est = max(
-                            self._head_position - delta,
-                            self._feet_position - delta,
-                        )
+                        est = max(start_head - delta, start_feet - delta)
+                        self.set_head_position(max(0.0, start_head - delta), persist=False)
+                        self.set_feet_position(max(0.0, start_feet - delta), persist=False)
                     if est <= 0.0:
                         if command == CMD_HEAD_DOWN:
                             self.set_head_position(0.0)
@@ -925,11 +931,39 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
-            end_ts = self.hass.loop.time() + duration_sec
-            last_keep_alive = self.hass.loop.time()
+            start_time = self.hass.loop.time()
+            end_ts = start_time + duration_sec
+            start_head = self._head_position
+            start_feet = self._feet_position
+            head_cal_sec = self.head_calibration_ms / 1000.0
+            feet_cal_sec = self.feet_calibration_ms / 1000.0
+            last_keep_alive = start_time
             while self.hass.loop.time() < end_ts:
                 await _write_gatt_char_flexible(client, command, response=False)
                 now = self.hass.loop.time()
+                elapsed = now - start_time
+                if command == CMD_HEAD_UP:
+                    est = start_head + (elapsed / max(0.1, head_cal_sec)) * 100.0
+                    self.set_head_position(min(100.0, est), persist=False)
+                elif command == CMD_HEAD_DOWN:
+                    est = start_head - (elapsed / max(0.1, head_cal_sec)) * 100.0
+                    self.set_head_position(max(0.0, est), persist=False)
+                elif command == CMD_FEET_UP:
+                    est = start_feet + (elapsed / max(0.1, feet_cal_sec)) * 100.0
+                    self.set_feet_position(min(100.0, est), persist=False)
+                elif command == CMD_FEET_DOWN:
+                    est = start_feet - (elapsed / max(0.1, feet_cal_sec)) * 100.0
+                    self.set_feet_position(max(0.0, est), persist=False)
+                elif command == CMD_BOTH_UP:
+                    both_cal = max(head_cal_sec, feet_cal_sec)
+                    delta = (elapsed / max(0.1, both_cal)) * 100.0
+                    self.set_head_position(min(100.0, start_head + delta), persist=False)
+                    self.set_feet_position(min(100.0, start_feet + delta), persist=False)
+                elif command == CMD_BOTH_DOWN:
+                    both_cal = max(head_cal_sec, feet_cal_sec)
+                    delta = (elapsed / max(0.1, both_cal)) * 100.0
+                    self.set_head_position(max(0.0, start_head - delta), persist=False)
+                    self.set_feet_position(max(0.0, start_feet - delta), persist=False)
                 if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
                     await _write_gatt_char_flexible(client, auth_cmd, response=False)
                     last_keep_alive = now
