@@ -103,3 +103,5 @@ DELAY_AFTER_STOP_SAME_CONN_SEC = 0.25
 COVER_DEBOUNCE_SEC = 0.35
 # Cooldown after movement: skip BLE status check so connection stays "connected" (device needs recovery time)
 COOLDOWN_AFTER_MOVEMENT_SEC = 35.0
+# Delay before disconnect after movement: lets bed process stop and resume advertising (avoids brief unavailable)
+DELAY_BEFORE_DISCONNECT_AFTER_MOVEMENT_SEC = 0.8
