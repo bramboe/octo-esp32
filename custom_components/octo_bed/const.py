@@ -59,7 +59,10 @@ CMD_LIGHT_OFF_PERMANENT = bytes(
     [0x40, 0x20, 0x72, 0x00, 0x08, 0xDE, 0x00, 0x01, 0x03, 0x01, 0x01, 0x01, 0x01, 0x00, 0x40]
 )
 
-# Keep-alive / validate PIN (4 digits): 40 20 43 00 04 00 + digits + 40
+# App init (no PIN): 40 20 7f 00 00 e1 40 — use when device has no PIN set (per capture "No pin given.txt")
+CMD_APP_INIT = bytes([0x40, 0x20, 0x7F, 0x00, 0x00, 0xE1, 0x40])
+
+# Keep-alive / validate PIN (4 digits): 40 20 43 00 04 00 + digits + 40 — use when device has PIN (per "Pin given.txt")
 KEEP_ALIVE_PREFIX = bytes([0x40, 0x20, 0x43, 0x00, 0x04, 0x00])
 KEEP_ALIVE_SUFFIX = bytes([0x40])
 
