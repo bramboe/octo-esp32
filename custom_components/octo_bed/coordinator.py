@@ -166,6 +166,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._feet_position = float(entry.options.get("feet_position", 0))
         self._light_on = False
         self._movement_active = False
+        self._last_movement_end_time: float = 0.0
         self._cancel_discovery: Any = None
         self._keep_alive_task: asyncio.Task[None] | None = None
         # Calibration: 0=idle, 1=head, 2=feet
@@ -401,6 +402,14 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Ensure we have a device address and verify PIN is accepted for 'connected' state."""
+        # Skip BLE check during movement - we're already connected; avoid connection conflict
+        if self._movement_active:
+            return self._data()
+        # Cooldown after movement: device may need time to become connectable again
+        if self._last_movement_end_time:
+            elapsed = self.hass.loop.time() - self._last_movement_end_time
+            if elapsed < 10.0:
+                return self._data()
         addr = self.device_address
         if addr and self._address_present(addr):
             self._authenticated = await self._check_pin_accepted()
@@ -905,6 +914,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if client:
                 await client.disconnect()
             self.set_movement_active(False)
+            self._last_movement_end_time = self.hass.loop.time()
         duration = self.hass.loop.time() - start_time
         return (duration, hit_limit)
 
@@ -990,6 +1000,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if client:
                 await client.disconnect()
             self.set_movement_active(False)
+            self._last_movement_end_time = self.hass.loop.time()
 
     async def async_set_head_position(self, position: float) -> bool:
         """Move head to 0-100%% (like cover set_position). Single BLE connection for smooth movement."""
