@@ -101,3 +101,5 @@ KEEP_ALIVE_DELAY_SEC = 0.05
 DELAY_AFTER_STOP_SAME_CONN_SEC = 0.25
 # Debounce cover slider: wait for user to release before starting movement (prevents stuttering)
 COVER_DEBOUNCE_SEC = 0.35
+# Cooldown after movement: skip BLE status check so connection stays "connected" (device needs recovery time)
+COOLDOWN_AFTER_MOVEMENT_SEC = 35.0
