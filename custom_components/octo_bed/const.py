@@ -83,6 +83,8 @@ CONNECT_TIMEOUT = 15.0
 WRITE_TIMEOUT = 5.0
 # Delay after connect before first write (YAML on_connect: "ensure service discovery completes")
 DELAY_AFTER_CONNECT_SEC = 1.0
+# Longer delay for calibration – Bluetooth proxy needs more time for GATT enumeration
+DELAY_AFTER_CONNECT_CALIBRATION_SEC = 2.5
 
 # Keep-alive interval (same as YAML keep_connection_alive script)
 KEEP_ALIVE_INTERVAL_SEC = 30
