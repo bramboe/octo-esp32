@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
+    BLE_CHAR_HANDLE,
     BLE_CHAR_UUID,
     CMD_APP_INIT,
     CONF_DEVICE_ADDRESS,
@@ -87,14 +88,43 @@ def _make_set_pin(pin: str) -> bytes:
 async def _write_gatt_char_flexible(
     client: Any, data: bytes, response: bool = False
 ) -> None:
-    """Write to FFE1 (YAML: service_uuid ffe0, characteristic_uuid ffe1). Use UUID only - handle fails on Bluetooth proxy."""
-    await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
+    """Write to FFE1 characteristic (Handle 0x0011 per captures). Try UUID first, fallback to handle for Bluetooth proxy."""
+    try:
+        await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "characteristic" in err_msg:
+            await client.write_gatt_char(BLE_CHAR_HANDLE, data, response=response)
+        else:
+            raise
 
 
 def _find_char_specifier(client: Any) -> str:
     """Return UUID for FFE1 (YAML: characteristic_uuid ffe1). Use UUID only - handle fails on Bluetooth proxy.
     Do NOT send CMD_STOP here - official app never sends stop before keep-alive/0x7F (per captures)."""
     return BLE_CHAR_UUID
+
+
+async def _start_notify_flexible(client: Any, callback: Any) -> None:
+    """Start notifications on FFE1. Try UUID first, fallback to handle 0x0011 for Bluetooth proxy."""
+    try:
+        await client.start_notify(BLE_CHAR_UUID, callback)
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "characteristic" in err_msg:
+            await client.start_notify(BLE_CHAR_HANDLE, callback)
+        else:
+            raise
+
+
+async def _stop_notify_flexible(client: Any) -> None:
+    """Stop notifications on FFE1. Try UUID then handle (one will succeed)."""
+    for spec in (BLE_CHAR_UUID, BLE_CHAR_HANDLE):
+        try:
+            await client.stop_notify(spec)
+            return
+        except Exception:
+            pass
 
 
 def _parse_pin_response(data: bytes) -> bool | None:
@@ -333,9 +363,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._last_device_notification_hex = raw.hex()
                 notif_event.set()
 
-            char_spec = _find_char_specifier(client)
             try:
-                await client.start_notify(char_spec, _on_notification)
+                await _start_notify_flexible(client, _on_notification)
             except Exception as e:
                 _LOGGER.debug("Could not start notifications for PIN response: %s", e)
             try:
@@ -368,7 +397,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         return True
             finally:
                 try:
-                    await client.stop_notify(char_spec)
+                    await _stop_notify_flexible(client)
                 except Exception:
                     pass
 
@@ -529,7 +558,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=CONNECT_TIMEOUT,
             )
             await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
-            char_spec = _find_char_specifier(client)
             received: list[bytes] = []
             notif_event = asyncio.Event()
 
@@ -537,9 +565,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 received.append(bytes(payload))
                 notif_event.set()
 
-            await client.start_notify(char_spec, _on_notification)
+            await _start_notify_flexible(client, _on_notification)
             try:
-                await client.write_gatt_char(char_spec, data, response=False)
+                await _write_gatt_char_flexible(client, data, response=False)
                 try:
                     await asyncio.wait_for(notif_event.wait(), timeout=wait_s)
                 except asyncio.TimeoutError:
@@ -550,7 +578,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._last_device_notification_hex = ""
             finally:
                 try:
-                    await client.stop_notify(char_spec)
+                    await _stop_notify_flexible(client)
                 except Exception:
                     pass
             return True
@@ -706,17 +734,16 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 received.append(bytes(data))
                 notif_event.set()
 
-            char_spec = _find_char_specifier(client)
-            try:
-                await client.start_notify(char_spec, _on_notification)
-            except Exception as e:
-                _LOGGER.debug("Set PIN: could not start notifications: %s", e)
+        try:
+            await _start_notify_flexible(client, _on_notification)
+        except Exception as e:
+            _LOGGER.debug("Set PIN: could not start notifications: %s", e)
                 return False
             try:
-                await client.write_gatt_char(char_spec, set_pin_cmd, response=True)
+                await _write_gatt_char_flexible(client, set_pin_cmd, response=True)
             except Exception:
                 try:
-                    await client.write_gatt_char(char_spec, set_pin_cmd, response=False)
+                    await _write_gatt_char_flexible(client, set_pin_cmd, response=False)
                 except Exception:
                     return False
             try:
@@ -1389,7 +1416,6 @@ async def probe_device_validates_pin(
             max_attempts=2,
         )
         await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
-        char_spec = _find_char_specifier(client)
         keep_alive = _make_keep_alive(_PROBE_WRONG_PIN)
         received: list[bytes] = []
         notif_event = asyncio.Event()
@@ -1399,16 +1425,16 @@ async def probe_device_validates_pin(
             notif_event.set()
 
         try:
-            await client.start_notify(char_spec, _on_notification)
+            await _start_notify_flexible(client, _on_notification)
             await asyncio.sleep(0.2)
         except Exception as e:
             _LOGGER.debug("Probe: could not start notifications: %s", e)
         try:
             try:
-                await client.write_gatt_char(char_spec, keep_alive, response=True)
+                await _write_gatt_char_flexible(client, keep_alive, response=True)
             except Exception:
                 try:
-                    await client.write_gatt_char(char_spec, keep_alive, response=False)
+                    await _write_gatt_char_flexible(client, keep_alive, response=False)
                 except Exception:
                     return False
             try:
@@ -1422,7 +1448,7 @@ async def probe_device_validates_pin(
                     return True
         finally:
             try:
-                await client.stop_notify(char_spec)
+                await _stop_notify_flexible(client)
             except Exception:
                 pass
         # No rejection notification – wait briefly to see if device disconnects
@@ -1502,7 +1528,6 @@ async def validate_pin(
             ble_device_callback=_get_ble_device,
         )
         await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
-        char_spec = _find_char_specifier(client)
         keep_alive = _make_keep_alive(pin)
         received: list[bytes] = []
         notif_event = asyncio.Event()
@@ -1512,16 +1537,16 @@ async def validate_pin(
             notif_event.set()
 
         try:
-            await client.start_notify(char_spec, _on_notification)
+            await _start_notify_flexible(client, _on_notification)
             await asyncio.sleep(0.2)  # Let CCC enable settle (official app enables before commands)
         except Exception as e:
             _LOGGER.debug("PIN validation: could not start notifications: %s", e)
         try:
             try:
-                await client.write_gatt_char(char_spec, keep_alive, response=True)
+                await _write_gatt_char_flexible(client, keep_alive, response=True)
             except Exception:
                 try:
-                    await client.write_gatt_char(char_spec, keep_alive, response=False)
+                    await _write_gatt_char_flexible(client, keep_alive, response=False)
                 except Exception:
                     return "connection_failed"
             try:
@@ -1532,7 +1557,7 @@ async def validate_pin(
             for data in received:
                 if PIN_RESPONSE_NOT_SET in data:
                     _LOGGER.debug("PIN validation: device has no PIN, sending app init (0x7F)")
-                    await client.write_gatt_char(char_spec, CMD_APP_INIT, response=False)
+                    await _write_gatt_char_flexible(client, CMD_APP_INIT, response=False)
                     await asyncio.sleep(0.2)
                     return "ok"
                 parsed = _parse_pin_response(data)
@@ -1543,7 +1568,7 @@ async def validate_pin(
                     return "ok"
         finally:
             try:
-                await client.stop_notify(char_spec)
+                await _stop_notify_flexible(client)
             except Exception:
                 pass
 
