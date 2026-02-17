@@ -110,45 +110,15 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         await super().async_will_remove_from_hass()
 
     async def _run_to_position(self, target: float, is_head: bool) -> None:
-        """Run head or feet to target 0-100 over a single BLE connection (smooth movement).
-        Skip stop when at 100%% or 0%% (bed already stopped). Retries once on BLE failure.
-        Keeps movement_active=True for the whole operation so coordinator skips BLE checks."""
+        """Run head or feet to target 0-100. Continuous movement until target or limit (no delays)."""
         coordinator = self.coordinator
-        coordinator.set_movement_active(True)
         try:
-            at_limit = (
-                (is_head and (abs(coordinator.head_position - 100) < 2 or abs(coordinator.head_position) < 2))
-                or (not is_head and (abs(coordinator.feet_position - 100) < 2 or abs(coordinator.feet_position) < 2))
-            )
-            if not at_limit:
-                await coordinator.async_send_stop()
-                await asyncio.sleep(0.1)
-            for attempt in range(2):
-                if is_head:
-                    current = coordinator.head_position
-                    cal_ms = coordinator.head_calibration_ms
-                    command = CMD_HEAD_UP if target > current else CMD_HEAD_DOWN
-                    set_pos = coordinator.set_head_position
-                else:
-                    current = coordinator.feet_position
-                    cal_ms = coordinator.feet_calibration_ms
-                    command = CMD_FEET_UP if target > current else CMD_FEET_DOWN
-                    set_pos = coordinator.set_feet_position
-                diff = abs(target - current)
-                if diff < 0.5:
-                    return
-                duration_ms = int((diff / 100.0) * cal_ms)
-                duration_ms = max(300, min(cal_ms, duration_ms))
-                duration_sec = duration_ms / 1000.0
-                ok = await coordinator.async_run_movement_for_duration(command, duration_sec)
-                if ok:
-                    set_pos(target)
-                    break
-                if attempt == 0:
-                    await asyncio.sleep(0.5)
-            self.async_write_ha_state()
+            if is_head:
+                await coordinator.async_set_head_position(target)
+            else:
+                await coordinator.async_set_feet_position(target)
         finally:
-            coordinator.set_movement_active(False)
+            self.async_write_ha_state()
 
 
 class OctoBedFeetCoverEntity(OctoBedCoverEntity):
@@ -208,34 +178,12 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
         await super().async_will_remove_from_hass()
 
     async def _run_to_position(self, target: float, is_head: bool) -> None:
-        """Run feet to target. Skip stop when at limit. Retries once on BLE failure.
-        Keeps movement_active=True for the whole operation so coordinator skips BLE checks."""
+        """Run feet to target. Continuous movement until target or limit (no delays)."""
         coordinator = self.coordinator
-        coordinator.set_movement_active(True)
         try:
-            at_limit = abs(coordinator.feet_position - 100) < 2 or abs(coordinator.feet_position) < 2
-            if not at_limit:
-                await coordinator.async_send_stop()
-                await asyncio.sleep(0.1)
-            for attempt in range(2):
-                current = coordinator.feet_position
-                cal_ms = coordinator.feet_calibration_ms
-                diff = abs(target - current)
-                if diff < 0.5:
-                    return
-                duration_ms = int((diff / 100.0) * cal_ms)
-                duration_ms = max(300, min(cal_ms, duration_ms))
-                duration_sec = duration_ms / 1000.0
-                command = CMD_FEET_UP if target > current else CMD_FEET_DOWN
-                ok = await coordinator.async_run_movement_for_duration(command, duration_sec)
-                if ok:
-                    coordinator.set_feet_position(target)
-                    break
-                if attempt == 0:
-                    await asyncio.sleep(0.5)
-            self.async_write_ha_state()
+            await coordinator.async_set_feet_position(target)
         finally:
-            coordinator.set_movement_active(False)
+            self.async_write_ha_state()
 
 
 class OctoBedBothCoverEntity(OctoBedCoverEntity):
