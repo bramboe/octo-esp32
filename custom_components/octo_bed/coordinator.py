@@ -199,6 +199,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_stop_event: asyncio.Event | None = None
         self._calibration_notification_task: asyncio.Task[None] | None = None
         self._calibration_stopping = False
+        # User pressed Stop (cover/button) – movement loop should abort
+        self._movement_stop_requested = asyncio.Event()
         # Test scan: send pattern-based system commands with delay; Stop test scan cancels it
         self._test_scan_task: asyncio.Task[None] | None = None
         self._test_scan_stop: asyncio.Event | None = None
@@ -604,7 +606,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await _safe_disconnect(client)
 
     async def async_send_stop(self) -> bool:
-        """Send stop command twice (ESPHome pattern for reliability). Single connection to reduce latency."""
+        """Send stop command twice (ESPHome pattern for reliability). Single connection to reduce latency.
+        Also signals any running movement loop to abort."""
+        self._movement_stop_requested.set()
         ble_device = self._get_ble_device()
         if not ble_device:
             return False
@@ -1059,37 +1063,134 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.set_movement_active(False)
             self._last_movement_end_time = self.hass.loop.time()
 
+    async def async_run_movement_until_target(
+        self, command: bytes, target: float, is_head: bool
+    ) -> bool:
+        """Run movement continuously until target %% or 0/100%% limit. No delays on reconnect – just continue.
+        Stops when: target reached, 0%% or 100%% limit, or BLE unrecoverable."""
+        ble_device = self._get_ble_device()
+        if not ble_device and self.device_address:
+            ble_device = await _wait_for_ble_device(
+                self.hass, self.device_address, max_sec=8.0
+            )
+        if not ble_device:
+            _LOGGER.warning("Movement: no BLE device for %s", self.device_address)
+            return False
+        self._movement_stop_requested.clear()
+        self.set_movement_active(True)
+        client = None
+        auth_cmd = self._get_auth_command()
+        cal_sec = (
+            self.head_calibration_ms / 1000.0 if is_head else self.feet_calibration_ms / 1000.0
+        )
+        going_up = command in (CMD_HEAD_UP, CMD_FEET_UP, CMD_BOTH_UP)
+        try:
+            while True:
+                try:
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        ble_device,
+                        self._device_name or "Octo Bed",
+                        disconnected_callback=None,
+                        timeout=CONNECT_TIMEOUT,
+                        use_services_cache=False,
+                        ble_device_callback=self._get_ble_device_for_reconnect,
+                    )
+                    await asyncio.sleep(DELAY_AFTER_CONNECT_MOVEMENT_SEC)
+                    await _write_gatt_char_flexible(client, auth_cmd, response=False)
+                    await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                    await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
+                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                    await asyncio.sleep(0.1)
+                    start_time = self.hass.loop.time()
+                    start_pos = (
+                        self._head_position if is_head else self._feet_position
+                    )
+                    last_keep_alive = start_time
+                    while True:
+                        if self._movement_stop_requested.is_set():
+                            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                            return False
+                        await _write_gatt_char_flexible(client, command, response=False)
+                        now = self.hass.loop.time()
+                        elapsed = now - start_time
+                        if going_up:
+                            est = start_pos + (elapsed / max(0.1, cal_sec)) * 100.0
+                            est = min(100.0, est)
+                        else:
+                            est = start_pos - (elapsed / max(0.1, cal_sec)) * 100.0
+                            est = max(0.0, est)
+                        if is_head:
+                            self.set_head_position(est, persist=False)
+                        else:
+                            self.set_feet_position(est, persist=False)
+                        if going_up and est >= target:
+                            if is_head:
+                                self.set_head_position(target)
+                            else:
+                                self.set_feet_position(target)
+                            break
+                        if not going_up and est <= target:
+                            if is_head:
+                                self.set_head_position(target)
+                            else:
+                                self.set_feet_position(target)
+                            break
+                        if est >= 99.5 or est <= 0.5:
+                            if is_head:
+                                self.set_head_position(100.0 if going_up else 0.0)
+                            else:
+                                self.set_feet_position(100.0 if going_up else 0.0)
+                            break
+                        if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
+                            await _write_gatt_char_flexible(client, auth_cmd, response=False)
+                            last_keep_alive = now
+                        await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                    await asyncio.sleep(0.1)
+                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                    return True
+                except Exception as e:
+                    await _safe_disconnect(client)
+                    client = None
+                    err = str(e).lower()
+                    if (
+                        "characteristic" in err
+                        or "connection" in err
+                        or "disconnect" in err
+                        or "timeout" in err
+                    ):
+                        _LOGGER.debug("Movement: BLE error, reconnecting immediately: %s", e)
+                        ble_device = self._get_ble_device()
+                        if not ble_device:
+                            _LOGGER.warning("Movement: no BLE device for reconnect")
+                            return False
+                        continue
+                    _LOGGER.warning("Movement-until-target BLE error: %s", e)
+                    return False
+        finally:
+            await _safe_disconnect(client)
+            self.set_movement_active(False)
+            self._last_movement_end_time = self.hass.loop.time()
+
     async def async_set_head_position(self, position: float) -> bool:
-        """Move head to 0-100%% (like cover set_position). Single BLE connection for smooth movement."""
+        """Move head to 0-100%% (like cover set_position). Continuous until target or limit."""
         position = max(0.0, min(100.0, position))
         current = self._head_position
         if abs(position - current) < 0.5:
             return True
-        diff = abs(position - current)
-        duration_ms = int((diff / 100.0) * self._head_calibration_ms)
-        duration_ms = max(300, min(self._head_calibration_ms, duration_ms))
-        duration_sec = duration_ms / 1000.0
         command = CMD_HEAD_UP if position > current else CMD_HEAD_DOWN
-        ok = await self.async_run_movement_for_duration(command, duration_sec)
-        if ok:
-            self.set_head_position(position)
-        return ok
+        return await self.async_run_movement_until_target(command, position, is_head=True)
 
     async def async_set_feet_position(self, position: float) -> bool:
-        """Move feet to 0-100%% (like cover set_position). Single BLE connection for smooth movement."""
+        """Move feet to 0-100%% (like cover set_position). Continuous until target or limit."""
         position = max(0.0, min(100.0, position))
         current = self._feet_position
         if abs(position - current) < 0.5:
             return True
-        diff = abs(position - current)
-        duration_ms = int((diff / 100.0) * self._feet_calibration_ms)
-        duration_ms = max(300, min(self._feet_calibration_ms, duration_ms))
-        duration_sec = duration_ms / 1000.0
         command = CMD_FEET_UP if position > current else CMD_FEET_DOWN
-        ok = await self.async_run_movement_for_duration(command, duration_sec)
-        if ok:
-            self.set_feet_position(position)
-        return ok
+        return await self.async_run_movement_until_target(command, position, is_head=False)
 
     async def async_set_light(self, on: bool) -> bool:
         if on:
