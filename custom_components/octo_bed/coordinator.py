@@ -257,13 +257,14 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._head_position = max(0.0, min(100.0, value))
         if persist:
             self._persist_position()
-        self.hass.async_create_task(self.async_request_refresh())
+        # Lightweight: push to entities without BLE check (avoids blocking during movement)
+        self.async_set_updated_data(self._data())
 
     def set_feet_position(self, value: float, *, persist: bool = True) -> None:
         self._feet_position = max(0.0, min(100.0, value))
         if persist:
             self._persist_position()
-        self.hass.async_create_task(self.async_request_refresh())
+        self.async_set_updated_data(self._data())
 
     def _persist_position(self) -> None:
         """Persist position to config entry options (like YAML restore_value)."""
@@ -911,7 +912,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await asyncio.sleep(0.1)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             if hit_limit:
-                self.async_request_refresh()
+                self.async_set_updated_data(self._data())
         except asyncio.CancelledError:
             await self._send_command(CMD_STOP)
             raise
