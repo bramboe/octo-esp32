@@ -90,13 +90,12 @@ async def _write_gatt_char_flexible(
     client: Any, data: bytes, response: bool = False
 ) -> None:
     """Write to FFE1 characteristic (Handle 0x0011 per captures). Use UUID only - handle fallback fails on some proxies ('Characteristic 17 was not found').
-    Retries once on 'characteristic not found' – minimal 0.15s pause to keep movement fluent."""
+    Retries once on 'characteristic not found' – no delay to avoid movement pause."""
     try:
         await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
     except Exception as e:
         err = str(e).lower()
         if "not found" in err and "characteristic" in err:
-            await asyncio.sleep(0.15)
             await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
         else:
             raise
@@ -1027,11 +1026,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     is_char_not_found = "characteristic" in err and "not found" in err
                     if attempt < 2 and is_char_not_found:
                         _LOGGER.debug(
-                            "Movement: characteristic not found at ~%.0f%% (resuming in 2s): %s",
+                            "Movement: characteristic not found at ~%.0f%% (resuming in 1s): %s",
                             100.0 * elapsed_total / duration_sec if duration_sec else 0,
                             e,
                         )
-                        await asyncio.sleep(2.0)
+                        await asyncio.sleep(1.0)
                         ble_device = self._get_ble_device()
                         if not ble_device:
                             _LOGGER.warning("Movement: no BLE device for retry")
