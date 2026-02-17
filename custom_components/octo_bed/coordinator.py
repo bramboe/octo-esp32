@@ -408,7 +408,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Cooldown after movement: device may need time to become connectable again
         if self._last_movement_end_time:
             elapsed = self.hass.loop.time() - self._last_movement_end_time
-            if elapsed < 10.0:
+            if elapsed < 15.0:
                 return self._data()
         addr = self.device_address
         if addr and self._address_present(addr):
