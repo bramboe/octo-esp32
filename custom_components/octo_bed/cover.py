@@ -111,14 +111,18 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
 
     async def _run_to_position(self, target: float, is_head: bool) -> None:
         """Run head or feet to target 0-100 over a single BLE connection (smooth movement).
-        Stop + delay first (like YAML stop_all_movements + 500ms) for clean state.
-        Retries once on BLE failure (connection often drops partway through).
-        Keeps movement_active=True for the whole operation so coordinator skips BLE checks (avoids 'connection unavailable')."""
+        Skip stop when at 100%% or 0%% (bed already stopped). Retries once on BLE failure.
+        Keeps movement_active=True for the whole operation so coordinator skips BLE checks."""
         coordinator = self.coordinator
         coordinator.set_movement_active(True)
         try:
-            await coordinator.async_send_stop()
-            await asyncio.sleep(0.2)
+            at_limit = (
+                (is_head and (abs(coordinator.head_position - 100) < 2 or abs(coordinator.head_position) < 2))
+                or (not is_head and (abs(coordinator.feet_position - 100) < 2 or abs(coordinator.feet_position) < 2))
+            )
+            if not at_limit:
+                await coordinator.async_send_stop()
+                await asyncio.sleep(0.1)
             for attempt in range(2):
                 if is_head:
                     current = coordinator.head_position
@@ -204,13 +208,15 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
         await super().async_will_remove_from_hass()
 
     async def _run_to_position(self, target: float, is_head: bool) -> None:
-        """Run feet to target. Stop + delay first (like YAML). Retries once on BLE failure.
+        """Run feet to target. Skip stop when at limit. Retries once on BLE failure.
         Keeps movement_active=True for the whole operation so coordinator skips BLE checks."""
         coordinator = self.coordinator
         coordinator.set_movement_active(True)
         try:
-            await coordinator.async_send_stop()
-            await asyncio.sleep(0.2)
+            at_limit = abs(coordinator.feet_position - 100) < 2 or abs(coordinator.feet_position) < 2
+            if not at_limit:
+                await coordinator.async_send_stop()
+                await asyncio.sleep(0.1)
             for attempt in range(2):
                 current = coordinator.feet_position
                 cal_ms = coordinator.feet_calibration_ms
@@ -294,12 +300,17 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
         """Move both sections to target. Never combines movement commands (per YAML).
         Same direction: phase 1 = both_up/down until faster section done; phase 2 = head or feet only.
         Different directions: sequential head then feet (never alternating). Retries once on BLE failure.
-        Keeps movement_active=True for the whole operation so coordinator skips BLE checks."""
+        Skip stop when both at 100%% or 0%%. Keeps movement_active=True for whole operation."""
         coordinator = self.coordinator
         coordinator.set_movement_active(True)
         try:
-            await coordinator.async_send_stop()
-            await asyncio.sleep(0.2)
+            both_at_limit = (
+                (abs(coordinator.head_position - 100) < 2 or abs(coordinator.head_position) < 2)
+                and (abs(coordinator.feet_position - 100) < 2 or abs(coordinator.feet_position) < 2)
+            )
+            if not both_at_limit:
+                await coordinator.async_send_stop()
+                await asyncio.sleep(0.1)
             for attempt in range(2):
                 head_current = coordinator.head_position
                 feet_current = coordinator.feet_position
