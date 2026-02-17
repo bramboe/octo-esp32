@@ -734,10 +734,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 received.append(bytes(data))
                 notif_event.set()
 
-        try:
-            await _start_notify_flexible(client, _on_notification)
-        except Exception as e:
-            _LOGGER.debug("Set PIN: could not start notifications: %s", e)
+            try:
+                await _start_notify_flexible(client, _on_notification)
+            except Exception as e:
+                _LOGGER.debug("Set PIN: could not start notifications: %s", e)
                 return False
             try:
                 await _write_gatt_char_flexible(client, set_pin_cmd, response=True)
