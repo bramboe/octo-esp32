@@ -91,9 +91,9 @@ async def _write_gatt_char_flexible(
     await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
 
 
-async def _find_char_specifier(client: Any) -> str:
-    """Return UUID for FFE1 (YAML: characteristic_uuid ffe1). Use UUID only - handle fails on Bluetooth proxy."""
-    await client.write_gatt_char(BLE_CHAR_UUID, CMD_STOP, response=False)
+def _find_char_specifier(client: Any) -> str:
+    """Return UUID for FFE1 (YAML: characteristic_uuid ffe1). Use UUID only - handle fails on Bluetooth proxy.
+    Do NOT send CMD_STOP here - official app never sends stop before keep-alive/0x7F (per captures)."""
     return BLE_CHAR_UUID
 
 
@@ -331,7 +331,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._last_device_notification_hex = raw.hex()
                 notif_event.set()
 
-            char_spec = await _find_char_specifier(client)
+            char_spec = _find_char_specifier(client)
             try:
                 await client.start_notify(char_spec, _on_notification)
             except Exception as e:
@@ -527,7 +527,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=CONNECT_TIMEOUT,
             )
             await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
-            char_spec = await _find_char_specifier(client)
+            char_spec = _find_char_specifier(client)
             received: list[bytes] = []
             notif_event = asyncio.Event()
 
@@ -704,7 +704,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 received.append(bytes(data))
                 notif_event.set()
 
-            char_spec = await _find_char_specifier(client)
+            char_spec = _find_char_specifier(client)
             try:
                 await client.start_notify(char_spec, _on_notification)
             except Exception as e:
@@ -1355,7 +1355,7 @@ async def probe_device_validates_pin(
             max_attempts=2,
         )
         await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
-        char_spec = await _find_char_specifier(client)
+        char_spec = _find_char_specifier(client)
         keep_alive = _make_keep_alive(_PROBE_WRONG_PIN)
         received: list[bytes] = []
         notif_event = asyncio.Event()
@@ -1468,7 +1468,7 @@ async def validate_pin(
             ble_device_callback=_get_ble_device,
         )
         await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
-        char_spec = await _find_char_specifier(client)
+        char_spec = _find_char_specifier(client)
         keep_alive = _make_keep_alive(pin)
         received: list[bytes] = []
         notif_event = asyncio.Event()
