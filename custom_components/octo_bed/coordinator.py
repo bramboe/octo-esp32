@@ -412,10 +412,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Ensure we have a device address and verify PIN is accepted for 'connected' state."""
-        # Skip BLE check during movement - we're already connected; avoid connection conflict
-        if self._movement_active:
+        # Skip BLE check during movement or calibration - avoid competing connections and disconnects
+        if self._movement_active or self._calibration_active or self._calibration_stopping:
             return self._data()
-        # Cooldown after movement: device may need time to become connectable again
+        # Cooldown after movement/calibration: device may need time to become connectable again
         if self._last_movement_end_time:
             elapsed = self.hass.loop.time() - self._last_movement_end_time
             if elapsed < 15.0:
@@ -1270,8 +1270,12 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.hass.async_create_task(self.async_request_refresh())
 
     async def async_stop_calibration(self) -> tuple[bool, float | None, float | None]:
-        """Stop calibration, save duration, set position to 100%%, run move_to_zero. Returns (ok, head_sec, feet_sec)."""
+        """Stop calibration, save elapsed time as 100%% duration, set position to 100%%, move calibrated section back to 0%%. Returns (ok, head_sec, feet_sec)."""
+        # Capture mode before task completes (done callback may clear it on BLE error)
+        was_head = self._calibration_mode == 1
+        was_feet = self._calibration_mode == 2
         self._calibration_stopping = True
+        self._last_movement_end_time = self.hass.loop.time()
         try:
             if self._calibration_stop_event:
                 self._calibration_stop_event.set()
@@ -1290,44 +1294,53 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             head_sec = feet_sec = None
             duration_ms = int((self.hass.loop.time() - self._calibration_start_time) * 1000)
             duration_ms = max(1000, min(120000, duration_ms))
-            if self._calibration_mode == 1:
+            if was_head:
                 head_sec = duration_ms / 1000.0
                 self._head_calibration_ms = duration_ms
                 self.set_head_position(100.0)
-                _LOGGER.info("Head calibration saved: %.1f s", head_sec)
-            elif self._calibration_mode == 2:
+                _LOGGER.info("Head calibration saved: %.1f s (100%% = full travel)", head_sec)
+            elif was_feet:
                 feet_sec = duration_ms / 1000.0
                 self._feet_calibration_ms = duration_ms
                 self.set_feet_position(100.0)
-                _LOGGER.info("Feet calibration saved: %.1f s", feet_sec)
+                _LOGGER.info("Feet calibration saved: %.1f s (100%% = full travel)", feet_sec)
             self._calibration_mode = 0
             self._calibration_active = False
             await self._stop_calibration_notification()
-            await self.async_move_to_zero()
+            # Move only the calibrated section back to 0%%
+            await self.async_move_to_zero(head_only=was_head, feet_only=was_feet)
             return True, head_sec, feet_sec
         finally:
             self._calibration_stopping = False
 
-    async def async_move_to_zero(self) -> None:
-        """Move head then feet down to 0%% (like YAML move_to_zero script). Single BLE connection per section."""
-        _LOGGER.info("Moving to zero (flat)")
-        head_start = self._head_position
-        if head_start > 0.5:
-            duration_ms = int((head_start / 100.0) * self._head_calibration_ms)
-            duration_ms = max(300, duration_ms)
-            await self.async_run_movement_for_duration(
-                CMD_HEAD_DOWN, duration_ms / 1000.0
-            )
-        self.set_head_position(0.0)
-        await asyncio.sleep(0.5)
-        feet_start = self._feet_position
-        if feet_start > 0.5:
-            duration_ms = int((feet_start / 100.0) * self._feet_calibration_ms)
-            duration_ms = max(300, duration_ms)
-            await self.async_run_movement_for_duration(
-                CMD_FEET_DOWN, duration_ms / 1000.0
-            )
-        self.set_feet_position(0.0)
+    async def async_move_to_zero(
+        self, head_only: bool = False, feet_only: bool = False
+    ) -> None:
+        """Move head and/or feet down to 0%%. head_only/feet_only: move only that section (e.g. after calibration stop)."""
+        move_head = head_only or (not feet_only and self._head_position > 0.5)
+        move_feet = feet_only or (not head_only and self._feet_position > 0.5)
+        sections = " ".join(filter(None, ["head" if move_head else "", "feet" if move_feet else ""]))
+        _LOGGER.info("Moving to zero (flat): %s", sections or "none")
+        if move_head:
+            head_start = self._head_position
+            if head_start > 0.5:
+                duration_ms = int((head_start / 100.0) * self._head_calibration_ms)
+                duration_ms = max(300, duration_ms)
+                await self.async_run_movement_for_duration(
+                    CMD_HEAD_DOWN, duration_ms / 1000.0
+                )
+            self.set_head_position(0.0)
+            if move_feet:
+                await asyncio.sleep(0.5)
+        if move_feet:
+            feet_start = self._feet_position
+            if feet_start > 0.5:
+                duration_ms = int((feet_start / 100.0) * self._feet_calibration_ms)
+                duration_ms = max(300, duration_ms)
+                await self.async_run_movement_for_duration(
+                    CMD_FEET_DOWN, duration_ms / 1000.0
+                )
+            self.set_feet_position(0.0)
         _LOGGER.info("Move to zero complete")
 
 
