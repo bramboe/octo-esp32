@@ -941,7 +941,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> bool:
         """Run a movement command for a fixed duration over a single BLE connection.
         Sends stop first (same connection), then command repeatedly. Returns True on success.
-        Retries up to 3 times on characteristic-not-found, resuming from elapsed time (Bluetooth proxy).
+        Retries up to 5 times on BLE errors, resuming from elapsed time (Bluetooth proxy).
         """
         if duration_sec <= 0:
             return True
@@ -957,7 +957,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elapsed_total = 0.0
         start_time: float = 0.0
         try:
-            for attempt in range(3):
+            for attempt in range(5):
                 remaining = duration_sec - elapsed_total
                 if remaining <= 0.1:
                     return True
@@ -1024,14 +1024,19 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     elapsed_total += max(0.0, elapsed_this_attempt)
                     err = str(e).lower()
-                    is_char_not_found = "characteristic" in err and "not found" in err
-                    if attempt < 2 and is_char_not_found:
+                    is_retryable = (
+                        ("characteristic" in err and "not found" in err)
+                        or "connection" in err
+                        or "disconnect" in err
+                        or "timeout" in err
+                    )
+                    if attempt < 4 and is_retryable:
                         _LOGGER.debug(
-                            "Movement: characteristic not found at ~%.0f%% (resuming in 1s): %s",
+                            "Movement: BLE error at ~%.0f%% (resuming in 0.5s): %s",
                             100.0 * elapsed_total / duration_sec if duration_sec else 0,
                             e,
                         )
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(0.5)
                         ble_device = self._get_ble_device()
                         if not ble_device:
                             _LOGGER.warning("Movement: no BLE device for retry")
