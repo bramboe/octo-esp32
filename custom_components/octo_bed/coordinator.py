@@ -940,7 +940,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> bool:
         """Run a movement command for a fixed duration over a single BLE connection.
         Sends stop first (same connection), then command repeatedly. Returns True on success.
-        Uses longer connect delay and retries on characteristic-not-found (Bluetooth proxy).
+        Retries up to 3 times on characteristic-not-found, resuming from elapsed time (Bluetooth proxy).
         """
         if duration_sec <= 0:
             return True
@@ -953,8 +953,13 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False
         self.set_movement_active(True)
         client = None
+        elapsed_total = 0.0
+        start_time: float = 0.0
         try:
-            for attempt in range(2):
+            for attempt in range(3):
+                remaining = duration_sec - elapsed_total
+                if remaining <= 0.1:
+                    return True
                 try:
                     client = await establish_connection(
                         BleakClientWithServiceCache,
@@ -974,7 +979,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await _write_gatt_char_flexible(client, CMD_STOP, response=False)
                     await asyncio.sleep(0.1)
                     start_time = self.hass.loop.time()
-                    end_ts = start_time + duration_sec
+                    end_ts = start_time + remaining
                     start_head = self._head_position
                     start_feet = self._feet_position
                     head_cal_sec = self.head_calibration_ms / 1000.0
@@ -1017,12 +1022,24 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except Exception as e:
                     await _safe_disconnect(client)
                     client = None
+                    elapsed_this_attempt = (
+                        self.hass.loop.time() - start_time if start_time > 0 else 0.0
+                    )
+                    elapsed_total += max(0.0, elapsed_this_attempt)
                     err = str(e).lower()
-                    if attempt == 0 and "characteristic" in err and "not found" in err:
+                    is_char_not_found = "characteristic" in err and "not found" in err
+                    if attempt < 2 and is_char_not_found:
                         _LOGGER.debug(
-                            "Movement: characteristic not found, retrying in 3s: %s", e
+                            "Movement: characteristic not found at ~%.0f%% (resuming in 4s): %s",
+                            100.0 * elapsed_total / duration_sec if duration_sec else 0,
+                            e,
                         )
-                        await asyncio.sleep(3.0)
+                        await asyncio.sleep(4.0)
+                        ble_device = self._get_ble_device()
+                        if not ble_device:
+                            _LOGGER.warning("Movement: no BLE device for retry")
+                            await self._send_command(CMD_STOP)
+                            return False
                         continue
                     _LOGGER.warning("Movement-for-duration BLE error: %s", e)
                     await self._send_command(CMD_STOP)
