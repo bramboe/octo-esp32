@@ -1336,8 +1336,8 @@ async def probe_device_validates_pin(
     hass: HomeAssistant,
     address: str,
     device_name: str,
-) -> bool:
-    """Send keep-alive with a wrong PIN. Return True if device validates PIN (sends 0x18 or disconnects), False otherwise."""
+) -> bool | None:
+    """Send keep-alive with a wrong PIN. Return True if device validates (0x18 or disconnect), False if stays connected with no reject, None if inconclusive (no notifications received, e.g. proxy doesn't forward)."""
     addr = address and address.strip()
     if not addr:
         return False
@@ -1396,6 +1396,9 @@ async def probe_device_validates_pin(
         if not client.is_connected:
             _LOGGER.debug("Probe: device disconnected after wrong PIN (supports PIN verification)")
             return True
+        if not received:
+            _LOGGER.debug("Probe: no notifications received (proxy may not forward) – inconclusive")
+            return None
         _LOGGER.info("Probe: device stayed connected after wrong PIN (does not support PIN verification)")
         return False
     except Exception as e:
@@ -1421,7 +1424,10 @@ async def validate_pin_with_probe(
         return result
     # User PIN failed: probe to distinguish wrong_pin vs no_pin_check (RC2)
     probe_validates = await probe_device_validates_pin(hass, address, device_name)
-    if probe_validates:
+    if probe_validates is True:
+        return "wrong_pin"
+    if probe_validates is None:
+        _LOGGER.debug("Probe inconclusive (no notifications) – assume wrong_pin so user can retry")
         return "wrong_pin"
     return "no_pin_check"
 
