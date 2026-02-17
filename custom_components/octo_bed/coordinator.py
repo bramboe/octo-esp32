@@ -14,7 +14,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
-    BLE_CHAR_HANDLE,
     BLE_CHAR_UUID,
     CMD_APP_INIT,
     CONF_DEVICE_ADDRESS,
@@ -88,15 +87,8 @@ def _make_set_pin(pin: str) -> bytes:
 async def _write_gatt_char_flexible(
     client: Any, data: bytes, response: bool = False
 ) -> None:
-    """Write to FFE1 characteristic (Handle 0x0011 per captures). Try UUID first, fallback to handle for Bluetooth proxy."""
-    try:
-        await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
-    except Exception as e:
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "characteristic" in err_msg:
-            await client.write_gatt_char(BLE_CHAR_HANDLE, data, response=response)
-        else:
-            raise
+    """Write to FFE1 characteristic (Handle 0x0011 per captures). Use UUID only - handle fallback fails on some proxies ('Characteristic 17 was not found')."""
+    await client.write_gatt_char(BLE_CHAR_UUID, data, response=response)
 
 
 def _find_char_specifier(client: Any) -> str:
@@ -106,25 +98,16 @@ def _find_char_specifier(client: Any) -> str:
 
 
 async def _start_notify_flexible(client: Any, callback: Any) -> None:
-    """Start notifications on FFE1. Try UUID first, fallback to handle 0x0011 for Bluetooth proxy."""
-    try:
-        await client.start_notify(BLE_CHAR_UUID, callback)
-    except Exception as e:
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "characteristic" in err_msg:
-            await client.start_notify(BLE_CHAR_HANDLE, callback)
-        else:
-            raise
+    """Start notifications on FFE1. Use UUID only (handle fallback fails on some proxies)."""
+    await client.start_notify(BLE_CHAR_UUID, callback)
 
 
 async def _stop_notify_flexible(client: Any) -> None:
-    """Stop notifications on FFE1. Try UUID then handle (one will succeed)."""
-    for spec in (BLE_CHAR_UUID, BLE_CHAR_HANDLE):
-        try:
-            await client.stop_notify(spec)
-            return
-        except Exception:
-            pass
+    """Stop notifications on FFE1."""
+    try:
+        await client.stop_notify(BLE_CHAR_UUID)
+    except Exception:
+        pass
 
 
 def _parse_pin_response(data: bytes) -> bool | None:
