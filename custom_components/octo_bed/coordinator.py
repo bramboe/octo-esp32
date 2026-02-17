@@ -946,6 +946,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if duration_sec <= 0:
             return True
         ble_device = self._get_ble_device()
+        if not ble_device and self.device_address:
+            ble_device = await _wait_for_ble_device(
+                self.hass, self.device_address, max_sec=8.0
+            )
         if not ble_device:
             _LOGGER.warning(
                 "Movement: no BLE device for %s (device may be out of range or not discovered)",
@@ -985,10 +989,14 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     start_feet = self._feet_position
                     head_cal_sec = self.head_calibration_ms / 1000.0
                     feet_cal_sec = self.feet_calibration_ms / 1000.0
+                    last_keep_alive = start_time
                     while self.hass.loop.time() < end_ts:
                         await _write_gatt_char_flexible(client, command, response=False)
                         now = self.hass.loop.time()
                         elapsed = now - start_time
+                        if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
+                            await _write_gatt_char_flexible(client, auth_cmd, response=False)
+                            last_keep_alive = now
                         if command == CMD_HEAD_UP:
                             est = start_head + (elapsed / max(0.1, head_cal_sec)) * 100.0
                             self.set_head_position(min(100.0, est), persist=False)
