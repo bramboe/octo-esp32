@@ -118,7 +118,7 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         coordinator.set_movement_active(True)
         try:
             await coordinator.async_send_stop()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)
             for attempt in range(2):
                 if is_head:
                     current = coordinator.head_position
@@ -210,7 +210,7 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
         coordinator.set_movement_active(True)
         try:
             await coordinator.async_send_stop()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)
             for attempt in range(2):
                 current = coordinator.feet_position
                 cal_ms = coordinator.feet_calibration_ms
@@ -299,7 +299,7 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
         coordinator.set_movement_active(True)
         try:
             await coordinator.async_send_stop()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)
             for attempt in range(2):
                 head_current = coordinator.head_position
                 feet_current = coordinator.feet_position
