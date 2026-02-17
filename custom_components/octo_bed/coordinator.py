@@ -938,6 +938,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> bool:
         """Run a movement command for a fixed duration over a single BLE connection.
         Sends stop first (same connection), then command repeatedly. Returns True on success.
+        Uses longer connect delay and retries on characteristic-not-found (Bluetooth proxy).
         """
         if duration_sec <= 0:
             return True
@@ -951,66 +952,79 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.set_movement_active(True)
         client = None
         try:
-            client = await establish_connection(
-                BleakClientWithServiceCache,
-                ble_device,
-                self._device_name or "Octo Bed",
-                disconnected_callback=None,
-                timeout=CONNECT_TIMEOUT,
-            )
-            await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
-            auth_cmd = self._get_auth_command()
-            await _write_gatt_char_flexible(client, auth_cmd, response=False)
-            await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
-            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-            await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
-            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-            await asyncio.sleep(0.1)
-            start_time = self.hass.loop.time()
-            end_ts = start_time + duration_sec
-            start_head = self._head_position
-            start_feet = self._feet_position
-            head_cal_sec = self.head_calibration_ms / 1000.0
-            feet_cal_sec = self.feet_calibration_ms / 1000.0
-            last_keep_alive = start_time
-            while self.hass.loop.time() < end_ts:
-                await _write_gatt_char_flexible(client, command, response=False)
-                now = self.hass.loop.time()
-                elapsed = now - start_time
-                if command == CMD_HEAD_UP:
-                    est = start_head + (elapsed / max(0.1, head_cal_sec)) * 100.0
-                    self.set_head_position(min(100.0, est), persist=False)
-                elif command == CMD_HEAD_DOWN:
-                    est = start_head - (elapsed / max(0.1, head_cal_sec)) * 100.0
-                    self.set_head_position(max(0.0, est), persist=False)
-                elif command == CMD_FEET_UP:
-                    est = start_feet + (elapsed / max(0.1, feet_cal_sec)) * 100.0
-                    self.set_feet_position(min(100.0, est), persist=False)
-                elif command == CMD_FEET_DOWN:
-                    est = start_feet - (elapsed / max(0.1, feet_cal_sec)) * 100.0
-                    self.set_feet_position(max(0.0, est), persist=False)
-                elif command == CMD_BOTH_UP:
-                    both_cal = max(head_cal_sec, feet_cal_sec)
-                    delta = (elapsed / max(0.1, both_cal)) * 100.0
-                    self.set_head_position(min(100.0, start_head + delta), persist=False)
-                    self.set_feet_position(min(100.0, start_feet + delta), persist=False)
-                elif command == CMD_BOTH_DOWN:
-                    both_cal = max(head_cal_sec, feet_cal_sec)
-                    delta = (elapsed / max(0.1, both_cal)) * 100.0
-                    self.set_head_position(max(0.0, start_head - delta), persist=False)
-                    self.set_feet_position(max(0.0, start_feet - delta), persist=False)
-                if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
+            for attempt in range(2):
+                try:
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        ble_device,
+                        self._device_name or "Octo Bed",
+                        disconnected_callback=None,
+                        timeout=CONNECT_TIMEOUT,
+                        use_services_cache=False,
+                        ble_device_callback=self._get_ble_device_for_reconnect,
+                    )
+                    await asyncio.sleep(DELAY_AFTER_CONNECT_CALIBRATION_SEC)
+                    auth_cmd = self._get_auth_command()
                     await _write_gatt_char_flexible(client, auth_cmd, response=False)
-                    last_keep_alive = now
-                await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
-            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-            await asyncio.sleep(0.1)
-            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-            return True
-        except Exception as e:
-            _LOGGER.warning("Movement-for-duration BLE error: %s", e)
-            await self._send_command(CMD_STOP)
-            return False
+                    await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                    await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
+                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                    await asyncio.sleep(0.1)
+                    start_time = self.hass.loop.time()
+                    end_ts = start_time + duration_sec
+                    start_head = self._head_position
+                    start_feet = self._feet_position
+                    head_cal_sec = self.head_calibration_ms / 1000.0
+                    feet_cal_sec = self.feet_calibration_ms / 1000.0
+                    last_keep_alive = start_time
+                    while self.hass.loop.time() < end_ts:
+                        await _write_gatt_char_flexible(client, command, response=False)
+                        now = self.hass.loop.time()
+                        elapsed = now - start_time
+                        if command == CMD_HEAD_UP:
+                            est = start_head + (elapsed / max(0.1, head_cal_sec)) * 100.0
+                            self.set_head_position(min(100.0, est), persist=False)
+                        elif command == CMD_HEAD_DOWN:
+                            est = start_head - (elapsed / max(0.1, head_cal_sec)) * 100.0
+                            self.set_head_position(max(0.0, est), persist=False)
+                        elif command == CMD_FEET_UP:
+                            est = start_feet + (elapsed / max(0.1, feet_cal_sec)) * 100.0
+                            self.set_feet_position(min(100.0, est), persist=False)
+                        elif command == CMD_FEET_DOWN:
+                            est = start_feet - (elapsed / max(0.1, feet_cal_sec)) * 100.0
+                            self.set_feet_position(max(0.0, est), persist=False)
+                        elif command == CMD_BOTH_UP:
+                            both_cal = max(head_cal_sec, feet_cal_sec)
+                            delta = (elapsed / max(0.1, both_cal)) * 100.0
+                            self.set_head_position(min(100.0, start_head + delta), persist=False)
+                            self.set_feet_position(min(100.0, start_feet + delta), persist=False)
+                        elif command == CMD_BOTH_DOWN:
+                            both_cal = max(head_cal_sec, feet_cal_sec)
+                            delta = (elapsed / max(0.1, both_cal)) * 100.0
+                            self.set_head_position(max(0.0, start_head - delta), persist=False)
+                            self.set_feet_position(max(0.0, start_feet - delta), persist=False)
+                        if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
+                            await _write_gatt_char_flexible(client, auth_cmd, response=False)
+                            last_keep_alive = now
+                        await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                    await asyncio.sleep(0.1)
+                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                    return True
+                except Exception as e:
+                    await _safe_disconnect(client)
+                    client = None
+                    err = str(e).lower()
+                    if attempt == 0 and "characteristic" in err and "not found" in err:
+                        _LOGGER.debug(
+                            "Movement: characteristic not found, retrying in 3s: %s", e
+                        )
+                        await asyncio.sleep(3.0)
+                        continue
+                    _LOGGER.warning("Movement-for-duration BLE error: %s", e)
+                    await self._send_command(CMD_STOP)
+                    return False
         finally:
             await _safe_disconnect(client)
             self.set_movement_active(False)
