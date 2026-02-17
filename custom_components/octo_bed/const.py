@@ -93,8 +93,8 @@ KEEP_ALIVE_INTERVAL_SEC = 30
 # Shorter interval during calibration/movement (Bluetooth proxy may drop connection; 5s keeps it alive)
 KEEP_ALIVE_ACTIVE_MOVEMENT_SEC = 5
 
-# Send movement command this often (200ms = fluent, no visible pauses)
-MOVEMENT_COMMAND_INTERVAL_SEC = 0.2
+# Send movement command this often (300ms = matches octo bed.yaml, stable)
+MOVEMENT_COMMAND_INTERVAL_SEC = 0.3
 # Delay after keep-alive before next command (bed needs brief time to process)
 KEEP_ALIVE_DELAY_SEC = 0.05
 # Delay after stop before starting movement (same connection; 250ms for bed to settle)
