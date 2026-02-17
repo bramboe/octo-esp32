@@ -85,14 +85,16 @@ WRITE_TIMEOUT = 5.0
 DELAY_AFTER_CONNECT_SEC = 1.0
 # Longer delay for calibration – Bluetooth proxy needs more time for GATT enumeration
 DELAY_AFTER_CONNECT_CALIBRATION_SEC = 2.5
+# Shorter delay for movement/stop – faster response, proxy usually ready in ~1s
+DELAY_AFTER_CONNECT_MOVEMENT_SEC = 1.0
 
 # Keep-alive interval (same as YAML keep_connection_alive script)
 KEEP_ALIVE_INTERVAL_SEC = 30
 # Shorter interval during calibration/movement (Bluetooth proxy may drop connection; 5s keeps it alive)
 KEEP_ALIVE_ACTIVE_MOVEMENT_SEC = 5
 
-# Send movement command this often (matches ESPHome 300ms for smooth control)
-MOVEMENT_COMMAND_INTERVAL_SEC = 0.3
+# Send movement command this often (200ms = fluent, no visible pauses)
+MOVEMENT_COMMAND_INTERVAL_SEC = 0.2
 # Delay after keep-alive before next command (bed needs brief time to process)
 KEEP_ALIVE_DELAY_SEC = 0.05
 # Delay after stop before starting movement (same connection; 250ms for bed to settle)
