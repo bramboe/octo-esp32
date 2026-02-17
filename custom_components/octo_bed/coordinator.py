@@ -24,6 +24,7 @@ from .const import (
     DOMAIN,
     CONF_DEVICE_NICKNAME,
     CONNECT_TIMEOUT,
+    COOLDOWN_AFTER_MOVEMENT_SEC,
     CMD_BOTH_DOWN,
     CMD_BOTH_UP,
     CMD_FEET_DOWN,
@@ -428,7 +429,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Cooldown after movement/calibration: device may need time to become connectable again
         if self._last_movement_end_time:
             elapsed = self.hass.loop.time() - self._last_movement_end_time
-            if elapsed < 15.0:
+            if elapsed < COOLDOWN_AFTER_MOVEMENT_SEC:
                 return self._data()
         addr = self.device_address
         if addr and self._address_present(addr):
