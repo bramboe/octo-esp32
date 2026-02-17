@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
     BLE_CHAR_UUID,
+    CMD_APP_INIT,
     CONF_DEVICE_ADDRESS,
     DELAY_AFTER_CONNECT_SEC,
     DELAY_AFTER_STOP_SAME_CONN_SEC,
@@ -171,6 +172,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._test_scan_set_id: int = 0
         # True only after we've sent keep-alive with PIN and device stayed connected (wrong PIN = disconnect)
         self._authenticated: bool = False
+        # True when device reported 0x1F (no PIN set) — use CMD_APP_INIT instead of keep-alive before commands
+        self._device_has_no_pin: bool = False
         # Last FFE1 notification that was not a PIN response (e.g. c0 21 status) – for diagnostics / future parsing
         self._last_device_notification_hex: str = ""
 
@@ -345,13 +348,21 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await asyncio.wait_for(notif_event.wait(), timeout=2.5)
                 except asyncio.TimeoutError:
                     pass
-                # Check all notifications: rejection (0x18/0x1b) is instant failure; accept (0x1A) is success
+                # Check all notifications: 0x1F = no PIN (use app init); 0x18 = rejected; 0x1A = accepted
                 for data in received:
+                    if PIN_RESPONSE_NOT_SET in data:
+                        _LOGGER.debug("Device has no PIN set, sending app init (0x7F) per No pin given.txt")
+                        self._device_has_no_pin = True
+                        await _write_gatt_char_flexible(client, CMD_APP_INIT, response=False)
+                        await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                        return True
                     parsed = _parse_pin_response(data)
                     if parsed is False:
                         _LOGGER.debug("Bed reported PIN rejected")
+                        self._device_has_no_pin = False
                         return False
                     if parsed is True:
+                        self._device_has_no_pin = False
                         return True
             finally:
                 try:
@@ -450,9 +461,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         return ble_device
 
+    def _get_auth_command(self) -> bytes:
+        """Auth command before other commands: CMD_APP_INIT when no PIN, else keep-alive with PIN (per captures)."""
+        if self._device_has_no_pin:
+            return CMD_APP_INIT
+        return _make_keep_alive(self.pin)
+
     async def _send_command(self, data: bytes) -> bool:
         """Connect to device (via proxy) and write command. Retries once on failure (transient BLE).
-        Sends keep-alive first when the command is not keep-alive – bed requires auth before accepting other commands."""
+        Sends auth first (app init or keep-alive per No pin given / Pin given captures) before other commands."""
         ble_device = self._get_ble_device()
         if not ble_device:
             if self.device_address:
@@ -463,7 +480,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 _LOGGER.debug("Octo Bed: no address configured, skipping BLE command")
             return False
-        keep_alive = _make_keep_alive(self.pin)
+        auth_cmd = self._get_auth_command()
         last_error = None
         for attempt in range(2):
             client = None
@@ -476,8 +493,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     timeout=CONNECT_TIMEOUT,
                 )
                 await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
-                if data != keep_alive:
-                    await _write_gatt_char_flexible(client, keep_alive, response=False)
+                if data != auth_cmd:
+                    await _write_gatt_char_flexible(client, auth_cmd, response=False)
                     await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
                 await _write_gatt_char_flexible(client, data, response=False)
                 return True
@@ -547,7 +564,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ble_device = self._get_ble_device()
         if not ble_device:
             return False
-        keep_alive = _make_keep_alive(self.pin)
+        auth_cmd = self._get_auth_command()
         client = None
         try:
             client = await establish_connection(
@@ -558,7 +575,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=CONNECT_TIMEOUT,
             )
             await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
-            await _write_gatt_char_flexible(client, keep_alive, response=False)
+            await _write_gatt_char_flexible(client, auth_cmd, response=False)
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
@@ -799,7 +816,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
             await _write_gatt_char_flexible(
-                client, _make_keep_alive(self.pin), response=False
+                client, self._get_auth_command(), response=False
             )
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
             last_keep_alive = self.hass.loop.time()
@@ -853,7 +870,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 now = self.hass.loop.time()
                 if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
                     await _write_gatt_char_flexible(
-                        client, _make_keep_alive(self.pin), response=False
+                        client, self._get_auth_command(), response=False
                     )
                     last_keep_alive = now
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
@@ -901,8 +918,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=CONNECT_TIMEOUT,
             )
             await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
-            keep_alive = _make_keep_alive(self.pin)
-            await _write_gatt_char_flexible(client, keep_alive, response=False)
+            auth_cmd = self._get_auth_command()
+            await _write_gatt_char_flexible(client, auth_cmd, response=False)
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
@@ -914,7 +931,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await _write_gatt_char_flexible(client, command, response=False)
                 now = self.hass.loop.time()
                 if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
-                    await _write_gatt_char_flexible(client, keep_alive, response=False)
+                    await _write_gatt_char_flexible(client, auth_cmd, response=False)
                     last_keep_alive = now
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
@@ -975,7 +992,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return ok
 
     async def async_send_keep_alive(self) -> bool:
-        return await self._send_command(_make_keep_alive(self.pin))
+        return await self._send_command(self._get_auth_command())
 
     async def _keep_alive_loop(self) -> None:
         """Send keep-alive every 30s (same as YAML keep_connection_alive script)."""
@@ -1060,7 +1077,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     now = self.hass.loop.time()
                     if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
                         await _write_gatt_char_flexible(
-                            client, _make_keep_alive(self.pin), response=False
+                            client, self._get_auth_command(), response=False
                         )
                         last_keep_alive = now
                     await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
@@ -1471,8 +1488,13 @@ async def validate_pin(
                 await asyncio.wait_for(notif_event.wait(), timeout=3.5)
             except asyncio.TimeoutError:
                 pass
-            # Check all notifications: rejection (0x18/0x1b) is instant failure; accept (0x1A) is success
+            # Check all notifications: 0x1F = no PIN (send app init); 0x18 = rejected; 0x1A = accepted
             for data in received:
+                if PIN_RESPONSE_NOT_SET in data:
+                    _LOGGER.debug("PIN validation: device has no PIN, sending app init (0x7F)")
+                    await client.write_gatt_char(char_spec, CMD_APP_INIT, response=False)
+                    await asyncio.sleep(0.2)
+                    return "ok"
                 parsed = _parse_pin_response(data)
                 if parsed is False:
                     _LOGGER.info("PIN validation: bed reported PIN rejected")
