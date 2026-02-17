@@ -85,13 +85,13 @@ WRITE_TIMEOUT = 5.0
 DELAY_AFTER_CONNECT_SEC = 1.0
 # Longer delay for calibration – Bluetooth proxy needs more time for GATT enumeration
 DELAY_AFTER_CONNECT_CALIBRATION_SEC = 2.5
-# Shorter delay for movement/stop – faster response, proxy usually ready in ~1s
-DELAY_AFTER_CONNECT_MOVEMENT_SEC = 1.0
+# Shorter delay for movement/stop – faster response
+DELAY_AFTER_CONNECT_MOVEMENT_SEC = 0.7
 
 # Keep-alive interval (same as YAML keep_connection_alive script)
 KEEP_ALIVE_INTERVAL_SEC = 30
-# Shorter interval during calibration/movement (Bluetooth proxy may drop connection; 5s keeps it alive)
-KEEP_ALIVE_ACTIVE_MOVEMENT_SEC = 5
+# Keep-alive during movement (proxy may drop; 8s = infrequent, avoids pause)
+KEEP_ALIVE_ACTIVE_MOVEMENT_SEC = 8
 
 # Send movement command this often (300ms = matches octo bed.yaml, stable)
 MOVEMENT_COMMAND_INTERVAL_SEC = 0.3
