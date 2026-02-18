@@ -1211,10 +1211,17 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return await self._send_command(self._get_auth_command())
 
     async def _keep_alive_loop(self) -> None:
-        """Send keep-alive every 30s (same as YAML keep_connection_alive script)."""
+        """Send keep-alive every 30s (same as YAML keep_connection_alive script).
+        Skip during movement/calibration/cooldown to avoid competing connections (proxy allows one per device)."""
         try:
             while True:
                 await asyncio.sleep(KEEP_ALIVE_INTERVAL_SEC)
+                if self._movement_active or self._calibration_active or self._calibration_stopping:
+                    continue
+                if self._last_movement_end_time:
+                    elapsed = self.hass.loop.time() - self._last_movement_end_time
+                    if elapsed < COOLDOWN_AFTER_MOVEMENT_SEC:
+                        continue
                 addr = self.device_address
                 if addr and self._address_present(addr):
                     await self.async_send_keep_alive()
