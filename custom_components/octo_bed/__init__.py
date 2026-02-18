@@ -33,10 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Octo Bed from a config entry."""
     hass.data.setdefault(DOMAIN, {})
     coordinator = OctoBedCoordinator(hass, entry)
-    # Set initial data so entities have something before first refresh completes
-    coordinator.async_set_updated_data(coordinator._data())
-    # Don't block on first refresh – BLE may not be ready; coordinator will retry on schedule
-    coordinator.async_request_refresh()
+    await coordinator.async_config_entry_first_refresh()
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     async_setup_services(hass)
