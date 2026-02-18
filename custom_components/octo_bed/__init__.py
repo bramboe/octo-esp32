@@ -7,7 +7,6 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import DOMAIN
 from .coordinator import OctoBedCoordinator
@@ -34,12 +33,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Octo Bed from a config entry."""
     hass.data.setdefault(DOMAIN, {})
     coordinator = OctoBedCoordinator(hass, entry)
-    try:
-        await coordinator.async_config_entry_first_refresh()
-    except ConfigEntryNotReady:
-        raise
-    except Exception as e:
-        _LOGGER.warning("First refresh failed, loading anyway (will retry): %s", e)
+    # Set initial data so entities have something before first refresh completes
+    coordinator.async_set_updated_data(coordinator._data())
+    # Don't block on first refresh – BLE may not be ready; coordinator will retry on schedule
+    coordinator.async_request_refresh()
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     async_setup_services(hass)
