@@ -425,24 +425,29 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await _safe_disconnect(client)
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Ensure we have a device address and verify PIN is accepted for 'connected' state."""
-        # Skip BLE check during movement or calibration - avoid competing connections and disconnects
-        if self._movement_active or self._calibration_active or self._calibration_stopping:
-            return self._data()
-        # Cooldown after movement/calibration: device may need time to become connectable again
-        if self._last_movement_end_time:
-            elapsed = self.hass.loop.time() - self._last_movement_end_time
-            if elapsed < COOLDOWN_AFTER_MOVEMENT_SEC:
+        """Ensure we have a device address and verify PIN is accepted for 'connected' state.
+        Never raises – always returns _data() so entities stay available during BLE hiccups."""
+        try:
+            # Skip BLE check during movement or calibration - avoid competing connections and disconnects
+            if self._movement_active or self._calibration_active or self._calibration_stopping:
                 return self._data()
-        addr = self.device_address
-        if addr and self._address_present(addr):
-            self._authenticated = await self._check_pin_accepted()
+            # Cooldown after movement/calibration: device may need time to become connectable again
+            if self._last_movement_end_time:
+                elapsed = self.hass.loop.time() - self._last_movement_end_time
+                if elapsed < COOLDOWN_AFTER_MOVEMENT_SEC:
+                    return self._data()
+            addr = self.device_address
+            if addr and self._address_present(addr):
+                self._authenticated = await self._check_pin_accepted()
+                return self._data()
+            self._authenticated = False
+            if addr:
+                _LOGGER.debug("Device %s not present, will retry discovery", addr)
+            await self._async_ensure_address()
             return self._data()
-        self._authenticated = False
-        if addr:
-            _LOGGER.debug("Device %s not present, will retry discovery", addr)
-        await self._async_ensure_address()
-        return self._data()
+        except Exception as e:
+            _LOGGER.debug("Coordinator update failed (keeping entities available): %s", e)
+            return self._data()
 
     async def _async_ensure_address(self) -> None:
         """Resolve device address from config or discovery."""
@@ -935,6 +940,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("Movement loop BLE error: %s", e)
             await self._send_command(CMD_STOP)
         finally:
+            if client is not None:
+                await asyncio.sleep(DELAY_BEFORE_DISCONNECT_AFTER_MOVEMENT_SEC)
             await _safe_disconnect(client)
             self.set_movement_active(False)
             self._last_movement_end_time = self.hass.loop.time()
