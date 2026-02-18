@@ -1123,6 +1123,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             while True:
                 await asyncio.sleep(KEEP_ALIVE_INTERVAL_SEC)
+                # Skip when movement/calibration holds the connection – avoid competing BLE connections
+                if self._movement_active or self._calibration_active:
+                    continue
                 addr = self.device_address
                 if addr and self._address_present(addr):
                     await self.async_send_keep_alive()
