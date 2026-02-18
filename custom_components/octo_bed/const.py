@@ -85,8 +85,8 @@ WRITE_TIMEOUT = 5.0
 DELAY_AFTER_CONNECT_SEC = 1.0
 # Longer delay for calibration – Bluetooth proxy needs more time for GATT enumeration
 DELAY_AFTER_CONNECT_CALIBRATION_SEC = 2.5
-# Shorter delay for movement/stop – faster response
-DELAY_AFTER_CONNECT_MOVEMENT_SEC = 0.7
+# Minimal delay for movement – connect and send immediately (GATT needs ~0.2s)
+DELAY_AFTER_CONNECT_MOVEMENT_SEC = 0.2
 
 # Keep-alive interval (same as YAML keep_connection_alive script)
 KEEP_ALIVE_INTERVAL_SEC = 30
@@ -97,11 +97,9 @@ KEEP_ALIVE_ACTIVE_MOVEMENT_SEC = 8
 MOVEMENT_COMMAND_INTERVAL_SEC = 0.3
 # Delay after keep-alive before next command (bed needs brief time to process)
 KEEP_ALIVE_DELAY_SEC = 0.05
-# Delay after stop before starting movement (same connection; 250ms for bed to settle)
-DELAY_AFTER_STOP_SAME_CONN_SEC = 0.25
+# Delay after stop before movement (same connection)
+DELAY_AFTER_STOP_SAME_CONN_SEC = 0.1
 # Debounce cover slider: wait for user to release before starting movement (prevents stuttering)
 COVER_DEBOUNCE_SEC = 0.35
 # Cooldown after movement: skip BLE status check so connection stays "connected" (device needs recovery time)
 COOLDOWN_AFTER_MOVEMENT_SEC = 35.0
-# Delay before disconnect after movement: lets bed process stop and resume advertising (avoids brief unavailable)
-DELAY_BEFORE_DISCONNECT_AFTER_MOVEMENT_SEC = 0.8
