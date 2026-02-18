@@ -30,4 +30,6 @@ class OctoBedEntity(CoordinatorEntity[OctoBedCoordinator], Entity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator.device_address is not None and super().available
+        # Stay available when we have an address – don't go unavailable on coordinator refresh
+        # failures (BLE hiccups). Connection status entity still shows connected/off.
+        return self.coordinator.device_address is not None
