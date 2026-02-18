@@ -30,4 +30,10 @@ class OctoBedEntity(CoordinatorEntity[OctoBedCoordinator], Entity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator.device_address is not None and super().available
+        # Stay available during movement/calibration even if BLE check would fail
+        # (proxy may report device as unavailable while connection is held)
+        if self.coordinator.device_address is None:
+            return False
+        if self.coordinator.movement_active or self.coordinator.calibration_active:
+            return True
+        return super().available
