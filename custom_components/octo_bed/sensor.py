@@ -35,7 +35,7 @@ class OctoBedConnectionSensor(OctoBedEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        return True
+        return self.coordinator.device_address is not None
 
 
 class OctoBedMacAddressSensor(OctoBedEntity, SensorEntity):
