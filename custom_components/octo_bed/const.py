@@ -90,11 +90,10 @@ DELAY_AFTER_CONNECT_MOVEMENT_SEC = 0.2
 
 # Keep-alive interval (same as YAML keep_connection_alive script)
 KEEP_ALIVE_INTERVAL_SEC = 30
-# Keep-alive during movement (proxy may drop; 8s = infrequent, avoids pause)
-KEEP_ALIVE_ACTIVE_MOVEMENT_SEC = 8
+# Official app does NOT send keep-alive during movement – only movement command
 
-# Send movement command this often (300ms = matches octo bed.yaml, stable)
-MOVEMENT_COMMAND_INTERVAL_SEC = 0.3
+# Send movement command this often (340ms = matches official app capture both_up_continuously)
+MOVEMENT_COMMAND_INTERVAL_SEC = 0.34
 # Delay after keep-alive before next command (bed needs brief time to process)
 KEEP_ALIVE_DELAY_SEC = 0.05
 # Delay after stop before movement (same connection)
