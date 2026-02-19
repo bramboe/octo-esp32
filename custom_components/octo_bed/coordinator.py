@@ -190,6 +190,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_movement_end_time: float = 0.0
         self._cancel_discovery: Any = None
         self._keep_alive_task: asyncio.Task[None] | None = None
+        # Persistent connection (like YAML: connect once, keep open, send keep-alive every 30s)
+        self._client: Any = None
+        self._client_lock: asyncio.Lock = asyncio.Lock()
+        self._connection_task: asyncio.Task[None] | None = None
+        self._connection_stop: asyncio.Event = asyncio.Event()
         # Calibration: 0=idle, 1=head, 2=feet
         self._calibration_mode = 0
         self._calibration_start_time: float = 0.0
@@ -208,8 +213,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._test_scan_last_index: int = 0
         self._test_scan_total: int = 0
         self._test_scan_set_id: int = 0
-        # True only after we've sent keep-alive with PIN and device stayed connected (wrong PIN = disconnect)
+        # True when we have active connection and sent keep-alive successfully (like YAML)
         self._authenticated: bool = False
+        # True when device reported explicit 0x18 PIN reject (wrong PIN)
+        self._pin_rejected: bool = False
         # True when device reported 0x1F (no PIN set) — use CMD_APP_INIT instead of keep-alive before commands
         self._device_has_no_pin: bool = False
         # Last FFE1 notification that was not a PIN response (e.g. c0 21 status) – for diagnostics / future parsing
@@ -346,18 +353,23 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or bluetooth.async_address_present(self.hass, addr, connectable=False)
         )
 
+    def _is_client_connected(self) -> bool:
+        """True if we have an active persistent BLE connection."""
+        return bool(
+            self._client
+            and getattr(self._client, "is_connected", False)
+        )
+
     def _data(self) -> dict[str, Any]:
         addr = self.device_address
-        present = bool(addr and self._address_present(addr))
-        # Connected = authenticated: we can send commands because the correct PIN was accepted (like ESPHome).
-        # Not just "BLE MAC in range" – wrong PIN or no auth means disconnected.
-        connected = bool(present and self._authenticated)
+        # Connected = we have active persistent BLE connection (like YAML: connect once, keep open).
+        # No periodic PIN check – connection stays "connected" as long as we're connected.
+        connected = self._is_client_connected()
         if not addr:
             connection_status = "searching"
-        elif not present:
-            connection_status = "disconnected"
-        elif not self._authenticated:
-            connection_status = "pin_not_accepted"
+        elif not connected:
+            # Only show pin_not_accepted when we got explicit 0x18 reject; else disconnected
+            connection_status = "pin_not_accepted" if getattr(self, "_pin_rejected", False) else "disconnected"
         else:
             connection_status = "connected"
         data: dict[str, Any] = {
@@ -463,24 +475,138 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         finally:
             await _safe_disconnect(client)
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        """Ensure we have a device address and verify PIN is accepted for 'connected' state."""
-        # Skip BLE check during movement or calibration - avoid competing connections and disconnects
-        if self._movement_active or self._calibration_active or self._calibration_stopping:
-            return self._data()
-        # Cooldown after movement/calibration: device may need time to become connectable again
-        if self._last_movement_end_time:
-            elapsed = self.hass.loop.time() - self._last_movement_end_time
-            if elapsed < COOLDOWN_AFTER_MOVEMENT_SEC:
-                return self._data()
-        addr = self.device_address
-        if addr and self._address_present(addr):
-            self._authenticated = await self._check_pin_accepted()
-            return self._data()
+    async def _auth_on_connect(self, client: Any) -> bool:
+        """Send keep-alive on new connection; set _authenticated, _pin_rejected, _device_has_no_pin. Does NOT disconnect."""
+        keep_alive = _make_keep_alive(self.pin)
+        received: list[bytes] = []
+        notif_event = asyncio.Event()
+
+        def _on_notification(_char_handle: int, data: bytearray) -> None:
+            raw = bytes(data)
+            received.append(raw)
+            if _parse_pin_response(raw) is None:
+                self._last_device_notification_hex = raw.hex()
+            notif_event.set()
+
+        try:
+            await _start_notify_flexible(client, _on_notification)
+        except Exception as e:
+            _LOGGER.debug("Could not start notifications for auth: %s", e)
+        try:
+            try:
+                await _write_gatt_char_flexible(client, keep_alive, response=True)
+            except Exception:
+                await _write_gatt_char_flexible(client, keep_alive, response=False)
+            try:
+                await asyncio.wait_for(notif_event.wait(), timeout=2.5)
+            except asyncio.TimeoutError:
+                pass
+            for data in received:
+                if PIN_RESPONSE_NOT_SET in data:
+                    _LOGGER.debug("Device has no PIN set, using app init")
+                    self._device_has_no_pin = True
+                    self._pin_rejected = False
+                    await _write_gatt_char_flexible(client, CMD_APP_INIT, response=False)
+                    await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                    self._authenticated = True
+                    return True
+                parsed = _parse_pin_response(data)
+                if parsed is False:
+                    _LOGGER.debug("Bed reported PIN rejected (0x18)")
+                    self._device_has_no_pin = False
+                    self._pin_rejected = True
+                    self._authenticated = False
+                    return False
+                if parsed is True:
+                    self._device_has_no_pin = False
+                    self._pin_rejected = False
+                    self._authenticated = True
+                    return True
+        finally:
+            try:
+                await _stop_notify_flexible(client)
+            except Exception:
+                pass
+        # Fallback: wrong PIN = device disconnects
+        await asyncio.sleep(2.0)
+        if client.is_connected:
+            _LOGGER.debug("Auth: device stayed connected (PIN accepted)")
+            self._pin_rejected = False
+            self._authenticated = True
+            return True
+        _LOGGER.debug("Auth: device disconnected after keep-alive (wrong PIN)")
+        self._pin_rejected = True
         self._authenticated = False
-        if addr:
-            _LOGGER.debug("Device %s not present, will retry discovery", addr)
-        await self._async_ensure_address()
+        return False
+
+    async def _connection_loop(self) -> None:
+        """Persistent connection: connect once, keep open, send keep-alive every 30s (like YAML)."""
+        reconnect_delay = 5.0
+        while not self._connection_stop.is_set():
+            addr = self.device_address
+            if not addr:
+                await self._async_ensure_address()
+                await asyncio.sleep(10.0)
+                continue
+            ble_device = self._get_ble_device()
+            if not ble_device:
+                await asyncio.sleep(reconnect_delay)
+                continue
+            client = None
+            try:
+                _LOGGER.debug("Persistent connection: connecting to %s", addr)
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    self._device_name or "Octo Bed",
+                    disconnected_callback=None,
+                    timeout=CONNECT_TIMEOUT,
+                    use_services_cache=False,
+                    ble_device_callback=self._get_ble_device_for_reconnect,
+                )
+                await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
+                if not await self._auth_on_connect(client):
+                    await _safe_disconnect(client)
+                    await asyncio.sleep(reconnect_delay)
+                    continue
+                async with self._client_lock:
+                    self._client = client
+                reconnect_delay = 5.0
+                self.async_set_updated_data(self._data())
+                _LOGGER.info("Persistent connection established to %s", addr)
+                while not self._connection_stop.is_set() and client.is_connected:
+                    await asyncio.sleep(KEEP_ALIVE_INTERVAL_SEC)
+                    if self._connection_stop.is_set():
+                        break
+                    if self._movement_active or self._calibration_active:
+                        continue
+                    async with self._client_lock:
+                        if self._client is client and client.is_connected:
+                            try:
+                                auth_cmd = self._get_auth_command()
+                                await _write_gatt_char_flexible(client, auth_cmd, response=False)
+                                _LOGGER.debug("Keep-alive sent to %s", addr)
+                            except Exception as e:
+                                _LOGGER.debug("Keep-alive write failed: %s", e)
+                                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                _LOGGER.debug("Connection loop error: %s", e)
+            finally:
+                async with self._client_lock:
+                    if self._client is client:
+                        self._client = None
+                self._authenticated = False
+                await _safe_disconnect(client)
+                self.async_set_updated_data(self._data())
+            await asyncio.sleep(reconnect_delay)
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Ensure we have a device address. Connection state comes from persistent connection – no periodic BLE check."""
+        addr = self.device_address
+        if not addr:
+            await self._async_ensure_address()
         return self._data()
 
     async def _async_ensure_address(self) -> None:
@@ -555,47 +681,30 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return _make_keep_alive(self.pin)
 
     async def _send_command(self, data: bytes) -> bool:
-        """Connect to device (via proxy) and write command. Retries once on failure (transient BLE).
-        Sends auth first (app init or keep-alive per No pin given / Pin given captures) before other commands."""
-        ble_device = self._get_ble_device()
-        if not ble_device:
-            if self.device_address:
-                _LOGGER.warning(
-                    "No BLE device available for Octo Bed (address: %s)",
-                    self.device_address,
-                )
-            else:
-                _LOGGER.debug("Octo Bed: no address configured, skipping BLE command")
-            return False
+        """Send command over persistent connection. No connect/disconnect – use existing connection (like YAML)."""
         auth_cmd = self._get_auth_command()
         for attempt in range(2):
-            client = None
+            async with self._client_lock:
+                client = self._client
+                if not client or not getattr(client, "is_connected", False):
+                    if attempt == 0:
+                        _LOGGER.debug("No persistent connection for command, waiting briefly")
+                        await asyncio.sleep(2.0)
+                        continue
+                    _LOGGER.warning("No persistent connection for Octo Bed command")
+                    return False
             try:
-                client = await establish_connection(
-                    BleakClientWithServiceCache,
-                    ble_device,
-                    self._device_name or "Octo Bed",
-                    disconnected_callback=None,
-                    timeout=CONNECT_TIMEOUT,
-                    use_services_cache=False,
-                    ble_device_callback=self._get_ble_device_for_reconnect,
-                )
-                await asyncio.sleep(DELAY_AFTER_CONNECT_MOVEMENT_SEC)
                 if data != auth_cmd:
                     await _write_gatt_char_flexible(client, auth_cmd, response=False)
                     await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
                 await _write_gatt_char_flexible(client, data, response=False)
                 return True
             except Exception as e:
-                err = str(e).lower()
                 if attempt == 0:
                     _LOGGER.debug("BLE write failed (will retry once): %s", e)
-                    backoff = 4.0 if "characteristic" in err and "not found" in err else 1.0
-                    await asyncio.sleep(backoff)
+                    await asyncio.sleep(1.0)
                 else:
                     _LOGGER.warning("BLE write failed after retry: %s", e)
-            finally:
-                await _safe_disconnect(client)
         return False
 
     async def _send_command_and_capture_notification(self, data: bytes, wait_s: float = 2.5) -> bool:
@@ -646,21 +755,13 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await _safe_disconnect(client)
 
     async def async_send_stop(self) -> bool:
-        """Send stop command twice (ESPHome pattern for reliability). Single connection to reduce latency."""
-        ble_device = self._get_ble_device()
-        if not ble_device:
-            return False
-        auth_cmd = self._get_auth_command()
-        client = None
+        """Send stop command twice over persistent connection (like YAML)."""
+        async with self._client_lock:
+            client = self._client
+            if not client or not getattr(client, "is_connected", False):
+                return False
         try:
-            client = await establish_connection(
-                BleakClientWithServiceCache,
-                ble_device,
-                self._device_name or "Octo Bed",
-                disconnected_callback=None,
-                timeout=CONNECT_TIMEOUT,
-            )
-            await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
+            auth_cmd = self._get_auth_command()
             await _write_gatt_char_flexible(client, auth_cmd, response=False)
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
@@ -670,8 +771,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as e:
             _LOGGER.debug("async_send_stop failed: %s", e)
             return False
-        finally:
-            await _safe_disconnect(client)
 
     async def async_send_make_discoverable(self) -> bool:
         """Send make-discoverable command twice (like pressing hub button 2× = teach remote)."""
@@ -876,12 +975,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         command: bytes,
         is_cancelled: Callable[[], bool],
     ) -> tuple[float, bool]:
-        """Send movement command every 300ms until cancelled or position limit reached.
-        Returns (duration_sec, hit_limit). When hit_limit is True, position was set to 100%/0%."""
-        ble_device = self._get_ble_device()
-        if not ble_device:
-            self.set_movement_active(False)
-            return (0.0, False)
+        """Send movement command every 340ms until cancelled or position limit reached. Uses persistent connection."""
         self.set_movement_active(True)
         client = None
         start_time = self.hass.loop.time()
@@ -891,14 +985,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         head_cal_sec = self.head_calibration_ms / 1000.0
         feet_cal_sec = self.feet_calibration_ms / 1000.0
         try:
-            client = await establish_connection(
-                BleakClientWithServiceCache,
-                ble_device,
-                self._device_name or "Octo Bed",
-                disconnected_callback=None,
-                timeout=CONNECT_TIMEOUT,
-            )
-            await asyncio.sleep(DELAY_AFTER_CONNECT_MOVEMENT_SEC)
+            async with self._client_lock:
+                client = self._client
+                if not client or not getattr(client, "is_connected", False):
+                    self.set_movement_active(False)
+                    return (0.0, False)
             await _write_gatt_char_flexible(
                 client, self._get_auth_command(), response=False
             )
@@ -972,7 +1063,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as e:
             _LOGGER.warning("Movement loop BLE error: %s", e)
         finally:
-            await _safe_disconnect(client)
+            # Do NOT disconnect – keep persistent connection open
             self.set_movement_active(False)
             self._last_movement_end_time = self.hass.loop.time()
         duration = self.hass.loop.time() - start_time
@@ -981,51 +1072,30 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_run_movement_for_duration(
         self, command: bytes, duration_sec: float
     ) -> bool:
-        """Run movement for duration_sec – send movement command every 340ms, no CMD_STOP.
-        Connect, auth once, then send movement until duration elapsed. Just stop sending when done.
+        """Run movement for duration_sec – send movement command every 340ms over persistent connection.
+        No connect/disconnect – use existing connection (like YAML).
         """
         if duration_sec <= 0:
             return True
-        ble_device = self._get_ble_device()
-        if not ble_device and self.device_address:
-            ble_device = await _wait_for_ble_device(
-                self.hass, self.device_address, max_sec=8.0
-            )
-        if not ble_device:
-            _LOGGER.warning(
-                "Movement: no BLE device for %s (device may be out of range or not discovered)",
-                self.device_address,
-            )
-            return False
         self.set_movement_active(True)
         client = None
         elapsed_total = 0.0
         start_time: float = 0.0
-        used_held = False
-        movement_success = False
         try:
             for attempt in range(5):
                 remaining = duration_sec - elapsed_total
                 if remaining <= 0.1:
                     return True
+                async with self._client_lock:
+                    client = self._client
+                    if not client or not getattr(client, "is_connected", False):
+                        if attempt == 0:
+                            _LOGGER.debug("Movement: waiting for persistent connection")
+                            await asyncio.sleep(3.0)
+                            continue
+                        _LOGGER.warning("Movement: no persistent connection")
+                        return False
                 try:
-                    if self._movement_client and getattr(self._movement_client, "is_connected", False):
-                        client = self._movement_client
-                        self._cancel_held_connection()
-                        used_held = True
-                    else:
-                        self._cancel_held_connection()
-                        client = await establish_connection(
-                            BleakClientWithServiceCache,
-                            ble_device,
-                            self._device_name or "Octo Bed",
-                            disconnected_callback=None,
-                            timeout=CONNECT_TIMEOUT,
-                            use_services_cache=False,
-                            ble_device_callback=self._get_ble_device_for_reconnect,
-                        )
-                    if not used_held:
-                        await asyncio.sleep(DELAY_AFTER_CONNECT_MOVEMENT_SEC)
                     auth_cmd = self._get_auth_command()
                     await _write_gatt_char_flexible(client, auth_cmd, response=False)
                     await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
@@ -1078,13 +1148,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             self.set_head_position(max(0.0, start_head - delta), persist=False)
                             self.set_feet_position(max(0.0, start_feet - delta), persist=False)
                         await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
-                    movement_success = True
                     return True
                 except Exception as e:
-                    used_held = False
-                    await _safe_disconnect(client)
-                    self._cancel_held_connection()
-                    client = None
                     elapsed_this_attempt = (
                         self.hass.loop.time() - start_time if start_time > 0 else 0.0
                     )
@@ -1103,19 +1168,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             e,
                         )
                         await asyncio.sleep(0.5)
-                        ble_device = self._get_ble_device()
-                        if not ble_device:
-                            _LOGGER.warning("Movement: no BLE device for retry")
-                            return False
                         continue
                     _LOGGER.warning("Movement-for-duration BLE error: %s", e)
                     return False
         finally:
-            if movement_success and client and getattr(client, "is_connected", False):
-                await self._schedule_disconnect_hold(client)
-            else:
-                self._cancel_held_connection()
-                await _safe_disconnect(client)
+            # Do NOT disconnect – keep persistent connection open (like YAML)
             self.set_movement_active(False)
             self._last_movement_end_time = self.hass.loop.time()
 
@@ -1166,34 +1223,37 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_send_keep_alive(self) -> bool:
         return await self._send_command(self._get_auth_command())
 
-    async def _keep_alive_loop(self) -> None:
-        """Send keep-alive every 30s (same as YAML keep_connection_alive script)."""
+    def start_persistent_connection(self) -> None:
+        """Start persistent connection loop (like YAML: connect once, keep open, keep-alive every 30s)."""
+        if self._connection_task is not None and not self._connection_task.done():
+            return
+        self._connection_stop.clear()
+        self._connection_task = self.hass.async_create_task(self._connection_loop())
+        _LOGGER.debug("Persistent connection loop started")
+
+    def cancel_persistent_connection(self) -> None:
+        """Stop connection loop and disconnect (call on integration unload)."""
+        self._connection_stop.set()
+        if self._connection_task:
+            self._connection_task.cancel()
+            self._connection_task = None
+        async def _disconnect() -> None:
+            async with self._client_lock:
+                client = self._client
+                self._client = None
+            await _safe_disconnect(client)
         try:
-            while True:
-                await asyncio.sleep(KEEP_ALIVE_INTERVAL_SEC)
-                # Skip when movement/calibration holds the connection – avoid competing BLE connections
-                if self._movement_active or self._calibration_active:
-                    continue
-                addr = self.device_address
-                if addr and self._address_present(addr):
-                    await self.async_send_keep_alive()
-                    _LOGGER.debug("Keep-alive sent to %s", addr)
-        except asyncio.CancelledError:
-            _LOGGER.debug("Keep-alive loop stopped")
-            raise
+            self.hass.async_create_task(_disconnect())
+        except Exception:
+            pass
 
     def start_keep_alive_loop(self) -> None:
-        """Start the periodic keep-alive task (call from async_setup_entry)."""
-        if self._keep_alive_task is not None and not self._keep_alive_task.done():
-            return
-        self._keep_alive_task = self.hass.async_create_task(self._keep_alive_loop())
-        _LOGGER.debug("Keep-alive loop started (every %ss)", KEEP_ALIVE_INTERVAL_SEC)
+        """Start persistent connection (alias for backward compatibility)."""
+        self.start_persistent_connection()
 
     def cancel_keep_alive_loop(self) -> None:
-        """Cancel the keep-alive task (call on integration unload)."""
-        if self._keep_alive_task:
-            self._keep_alive_task.cancel()
-            self._keep_alive_task = None
+        """Cancel persistent connection (alias for backward compatibility)."""
+        self.cancel_persistent_connection()
 
     async def async_ensure_address_from_discovery(self) -> bool:
         """Run discovery once to try to get device address. Returns True if address is set."""
