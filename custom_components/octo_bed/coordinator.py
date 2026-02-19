@@ -23,6 +23,7 @@ from .const import (
     DOMAIN,
     CONF_DEVICE_NICKNAME,
     CONNECT_TIMEOUT,
+    CONNECTION_HOLD_AFTER_MOVEMENT_SEC,
     COOLDOWN_AFTER_MOVEMENT_SEC,
     CMD_BOTH_DOWN,
     CMD_BOTH_UP,
@@ -198,6 +199,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_notification_task: asyncio.Task[None] | None = None
         self._calibration_stopping = False
         self._active_cover_task: asyncio.Task[Any] | None = None
+        self._movement_client: Any = None
+        self._movement_client_disconnect_task: asyncio.Task[None] | None = None
         # Test scan: send pattern-based system commands with delay; Stop test scan cancels it
         self._test_scan_task: asyncio.Task[None] | None = None
         self._test_scan_stop: asyncio.Event | None = None
@@ -292,6 +295,37 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._active_cover_task.cancel()
         self._active_cover_task = None
         self._movement_active = False
+
+    def _cancel_held_connection(self) -> None:
+        """Cancel delayed disconnect and clear held client."""
+        if self._movement_client_disconnect_task and not self._movement_client_disconnect_task.done():
+            self._movement_client_disconnect_task.cancel()
+        self._movement_client_disconnect_task = None
+        self._movement_client = None
+
+    async def disconnect_held_connection(self) -> None:
+        """Disconnect held client (call on unload)."""
+        await _safe_disconnect(self._movement_client)
+        self._cancel_held_connection()
+
+    async def _schedule_disconnect_hold(self, client: Any) -> None:
+        """Schedule disconnect after CONNECTION_HOLD_AFTER_MOVEMENT_SEC; store client for reuse."""
+        self._cancel_held_connection()
+        self._movement_client = client
+
+        async def _delayed_disconnect() -> None:
+            try:
+                await asyncio.sleep(CONNECTION_HOLD_AFTER_MOVEMENT_SEC)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                await _safe_disconnect(self._movement_client)
+                self._movement_client = None
+                self._movement_client_disconnect_task = None
+
+        self._movement_client_disconnect_task = self.hass.async_create_task(
+            _delayed_disconnect()
+        )
 
     def set_calibration(self, head_sec: float | None = None, feet_sec: float | None = None) -> None:
         if head_sec is not None:
@@ -967,22 +1001,31 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         client = None
         elapsed_total = 0.0
         start_time: float = 0.0
+        used_held = False
+        movement_success = False
         try:
             for attempt in range(5):
                 remaining = duration_sec - elapsed_total
                 if remaining <= 0.1:
                     return True
                 try:
-                    client = await establish_connection(
-                        BleakClientWithServiceCache,
-                        ble_device,
-                        self._device_name or "Octo Bed",
-                        disconnected_callback=None,
-                        timeout=CONNECT_TIMEOUT,
-                        use_services_cache=False,
-                        ble_device_callback=self._get_ble_device_for_reconnect,
-                    )
-                    await asyncio.sleep(DELAY_AFTER_CONNECT_MOVEMENT_SEC)
+                    if self._movement_client and getattr(self._movement_client, "is_connected", False):
+                        client = self._movement_client
+                        self._cancel_held_connection()
+                        used_held = True
+                    else:
+                        self._cancel_held_connection()
+                        client = await establish_connection(
+                            BleakClientWithServiceCache,
+                            ble_device,
+                            self._device_name or "Octo Bed",
+                            disconnected_callback=None,
+                            timeout=CONNECT_TIMEOUT,
+                            use_services_cache=False,
+                            ble_device_callback=self._get_ble_device_for_reconnect,
+                        )
+                    if not used_held:
+                        await asyncio.sleep(DELAY_AFTER_CONNECT_MOVEMENT_SEC)
                     auth_cmd = self._get_auth_command()
                     await _write_gatt_char_flexible(client, auth_cmd, response=False)
                     await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
@@ -1035,9 +1078,12 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             self.set_head_position(max(0.0, start_head - delta), persist=False)
                             self.set_feet_position(max(0.0, start_feet - delta), persist=False)
                         await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
+                    movement_success = True
                     return True
                 except Exception as e:
+                    used_held = False
                     await _safe_disconnect(client)
+                    self._cancel_held_connection()
                     client = None
                     elapsed_this_attempt = (
                         self.hass.loop.time() - start_time if start_time > 0 else 0.0
@@ -1065,7 +1111,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     _LOGGER.warning("Movement-for-duration BLE error: %s", e)
                     return False
         finally:
-            await _safe_disconnect(client)
+            if movement_success and client and getattr(client, "is_connected", False):
+                await self._schedule_disconnect_hold(client)
+            else:
+                self._cancel_held_connection()
+                await _safe_disconnect(client)
             self.set_movement_active(False)
             self._last_movement_end_time = self.hass.loop.time()
 
