@@ -1280,37 +1280,20 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self._get_ble_device()
 
     async def _calibration_loop(self, head: bool) -> None:
-        """Same as Head Up / Feet Up switch: keep-alive, then CMD_HEAD_UP or CMD_FEET_UP every 300ms until stop.
-        Reconnects on BLE error so calibration continues until user presses stop.
-        Uses fresh device ref and service cache disabled for stable proxy reconnects.
-        """
+        """Send CMD_HEAD_UP or CMD_FEET_UP every 340ms until stop. Uses persistent connection – no disconnect."""
         command = CMD_HEAD_UP if head else CMD_FEET_UP
         stop_event = self._calibration_stop_event
         if not stop_event:
             return
         section = "head" if head else "feet"
         while not stop_event.is_set():
-            ble_device = self._get_ble_device()
-            if not ble_device and self.device_address:
-                ble_device = await _wait_for_ble_device(
-                    self.hass, self.device_address, max_sec=15.0
-                )
-            if not ble_device:
-                _LOGGER.warning("Calibration: BLE device not available, stopping")
-                return
-            client = None
+            async with self._client_lock:
+                client = self._client
+                if not client or not getattr(client, "is_connected", False):
+                    _LOGGER.warning("Calibration: no persistent connection, waiting")
+                    await asyncio.sleep(2.0)
+                    continue
             try:
-                client = await establish_connection(
-                    BleakClientWithServiceCache,
-                    ble_device,
-                    self._device_name or "Octo Bed",
-                    disconnected_callback=None,
-                    timeout=CONNECT_TIMEOUT,
-                    max_attempts=3,
-                    use_services_cache=False,
-                    ble_device_callback=self._get_ble_device_for_reconnect,
-                )
-                await asyncio.sleep(DELAY_AFTER_CONNECT_CALIBRATION_SEC)
                 await _write_gatt_char_flexible(
                     client, self._get_auth_command(), response=False
                 )
@@ -1331,15 +1314,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise
             except Exception as e:
                 _LOGGER.warning(
-                    "Calibration %s BLE error (reconnecting): %s", section, e
+                    "Calibration %s BLE error (will retry): %s", section, e
                 )
                 if stop_event.is_set():
                     break
-                err = str(e).lower()
-                backoff = 4.0 if "characteristic" in err and "not found" in err else 0.5
-                await asyncio.sleep(backoff)
-            finally:
-                await _safe_disconnect(client)
+                await asyncio.sleep(0.5)
 
     def _calibration_notification_id(self) -> str:
         return f"octo_bed_calibration_{self._entry.entry_id}"
