@@ -869,6 +869,18 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 client, self._get_auth_command(), response=False
             )
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+            if command in (CMD_HEAD_UP, CMD_HEAD_DOWN):
+                at_extreme = self._head_position <= 1.0 or self._head_position >= 99.0
+            elif command in (CMD_FEET_UP, CMD_FEET_DOWN):
+                at_extreme = self._feet_position <= 1.0 or self._feet_position >= 99.0
+            else:
+                at_extreme = (
+                    (self._head_position <= 1.0 or self._head_position >= 99.0)
+                    or (self._feet_position <= 1.0 or self._feet_position >= 99.0)
+                )
+            if at_extreme:
+                await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                await asyncio.sleep(0.1)
             while not is_cancelled():
                 elapsed = self.hass.loop.time() - start_time
                 if command in (CMD_HEAD_UP, CMD_FEET_UP, CMD_BOTH_UP):
@@ -974,6 +986,20 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     auth_cmd = self._get_auth_command()
                     await _write_gatt_char_flexible(client, auth_cmd, response=False)
                     await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                    if command in (CMD_HEAD_UP, CMD_HEAD_DOWN):
+                        at_extreme = self._head_position <= 1.0 or self._head_position >= 99.0
+                    elif command in (CMD_FEET_UP, CMD_FEET_DOWN):
+                        at_extreme = self._feet_position <= 1.0 or self._feet_position >= 99.0
+                    elif command in (CMD_BOTH_UP, CMD_BOTH_DOWN):
+                        at_extreme = (
+                            (self._head_position <= 1.0 or self._head_position >= 99.0)
+                            or (self._feet_position <= 1.0 or self._feet_position >= 99.0)
+                        )
+                    else:
+                        at_extreme = False
+                    if at_extreme:
+                        await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                        await asyncio.sleep(0.1)
                     start_time = self.hass.loop.time()
                     end_ts = start_time + remaining
                     start_head = self._head_position
@@ -1168,6 +1194,13 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     client, self._get_auth_command(), response=False
                 )
                 await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                at_extreme = (
+                    (self._head_position <= 1.0 or self._head_position >= 99.0)
+                    or (self._feet_position <= 1.0 or self._feet_position >= 99.0)
+                )
+                if at_extreme:
+                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+                    await asyncio.sleep(0.1)
                 while not stop_event.is_set():
                     await _write_gatt_char_flexible(
                         client, command, response=False
