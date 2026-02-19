@@ -101,20 +101,18 @@ class OctoBedFeetPositionSensor(OctoBedEntity, SensorEntity):
 
 
 class OctoBedCalibrationElapsedSensor(OctoBedEntity, SensorEntity):
-    """Elapsed time during calibration. Shows seconds (1, 2, 3...) when calibrating, — when not."""
+    """Elapsed time during calibration (e.g. 2:35). Shows — when not calibrating."""
 
     _attr_name = "Calibration elapsed"
     _attr_unique_id = "calibration_elapsed"
     _attr_icon = "mdi:timer-outline"
-    _attr_native_unit_of_measurement = "s"
 
     @property
-    def native_value(self) -> str | int:
+    def native_value(self) -> str:
         data = self.coordinator.data or {}
         if not data.get("calibration_active"):
             return "—"
-        elapsed = data.get("calibration_elapsed_sec", 0)
-        return int(elapsed)
+        return data.get("calibration_elapsed_formatted", "0:00")
 
     @property
     def extra_state_attributes(self) -> dict[str, str | float]:
@@ -123,7 +121,6 @@ class OctoBedCalibrationElapsedSensor(OctoBedEntity, SensorEntity):
         if data.get("calibration_active"):
             attrs["section"] = data.get("calibration_section", "unknown")
             attrs["elapsed_seconds"] = data.get("calibration_elapsed_sec", 0)
-            attrs["formatted"] = data.get("calibration_elapsed_formatted", "0:00")
         return attrs
 
     @property
