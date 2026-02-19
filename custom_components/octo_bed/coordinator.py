@@ -702,7 +702,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _send_command(self, data: bytes) -> bool:
         """Send command over persistent connection. No connect/disconnect – use existing connection (like YAML)."""
-        auth_cmd = self._get_auth_command()
         for attempt in range(2):
             async with self._client_lock:
                 client = self._client
@@ -714,11 +713,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     _LOGGER.warning("No persistent connection for Octo Bed command")
                     return False
             try:
-                async with self._client_lock:
-                    if data != auth_cmd:
-                        await _write_gatt_char_flexible(client, auth_cmd, response=False)
-                if data != auth_cmd:
-                    await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
                 async with self._client_lock:
                     await _write_gatt_char_flexible(client, data, response=False)
                 _LOGGER.debug("Command sent: %s", data.hex())
@@ -950,21 +944,39 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await _safe_disconnect(client)
 
     async def async_send_head_up(self) -> bool:
+        if not await self._connection_check_before_movement():
+            return False
+        await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
         return await self._send_command(CMD_HEAD_UP)
 
     async def async_send_head_down(self) -> bool:
+        if not await self._connection_check_before_movement():
+            return False
+        await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
         return await self._send_command(CMD_HEAD_DOWN)
 
     async def async_send_feet_up(self) -> bool:
+        if not await self._connection_check_before_movement():
+            return False
+        await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
         return await self._send_command(CMD_FEET_UP)
 
     async def async_send_feet_down(self) -> bool:
+        if not await self._connection_check_before_movement():
+            return False
+        await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
         return await self._send_command(CMD_FEET_DOWN)
 
     async def async_send_both_up(self) -> bool:
+        if not await self._connection_check_before_movement():
+            return False
+        await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
         return await self._send_command(CMD_BOTH_UP)
 
     async def async_send_both_down(self) -> bool:
+        if not await self._connection_check_before_movement():
+            return False
+        await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
         return await self._send_command(CMD_BOTH_DOWN)
 
     def update_position_after_switch_movement(
@@ -1266,6 +1278,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return ok
 
     async def async_set_light(self, on: bool) -> bool:
+        if not await self._connection_check_before_movement():
+            return False
+        await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
         if on:
             ok = await self._send_command(CMD_LIGHT_ON)
         else:
