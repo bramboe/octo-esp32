@@ -102,3 +102,5 @@ DELAY_AFTER_STOP_SAME_CONN_SEC = 0.1
 COVER_DEBOUNCE_SEC = 0.35
 # Cooldown after movement: skip BLE status check so connection stays "connected" (device needs recovery time)
 COOLDOWN_AFTER_MOVEMENT_SEC = 35.0
+# Keep BLE connection open after movement – reuse for next command (avoids 15–20s reconnect delay)
+CONNECTION_HOLD_AFTER_MOVEMENT_SEC = 30.0
