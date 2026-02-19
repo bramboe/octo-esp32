@@ -55,7 +55,7 @@ class OctoBedConnectionBinarySensor(OctoBedEntity, BinarySensorEntity):
 
     @property
     def available(self) -> bool:
-        return True
+        return self.coordinator.device_address is not None
 
 
 async def async_setup_entry(
