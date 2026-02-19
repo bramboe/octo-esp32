@@ -49,6 +49,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _start_keep_alive)
     entry.async_on_unload(coordinator.cancel_keep_alive_loop)
 
+    def _unload_cleanup() -> None:
+        hass.async_create_task(coordinator.disconnect_held_connection())
+
+    entry.async_on_unload(_unload_cleanup)
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
