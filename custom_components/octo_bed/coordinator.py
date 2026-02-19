@@ -1022,8 +1022,16 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if at_extreme:
                 await _write_gatt_char_flexible(client, CMD_STOP, response=False)
                 await asyncio.sleep(0.1)
+            last_keep_alive = self.hass.loop.time()
             while not is_cancelled():
-                elapsed = self.hass.loop.time() - start_time
+                now = self.hass.loop.time()
+                if now - last_keep_alive >= KEEP_ALIVE_INTERVAL_SEC:
+                    await _write_gatt_char_flexible(
+                        client, self._get_auth_command(), response=False
+                    )
+                    await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                    last_keep_alive = now
+                elapsed = now - start_time
                 if command in (CMD_HEAD_UP, CMD_FEET_UP, CMD_BOTH_UP):
                     if command == CMD_HEAD_UP:
                         est = start_head + (elapsed / max(0.1, head_cal_sec)) * 100.0
@@ -1097,19 +1105,25 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         client = None
         elapsed_total = 0.0
         start_time: float = 0.0
+        wait_start = self.hass.loop.time()
+        max_wait_sec = 45.0
         try:
-            for attempt in range(5):
+            for attempt in range(20):
                 remaining = duration_sec - elapsed_total
                 if remaining <= 0.1:
                     return True
                 async with self._client_lock:
                     client = self._client
                     if not client or not getattr(client, "is_connected", False):
-                        if attempt == 0:
-                            _LOGGER.debug("Movement: waiting for persistent connection")
-                            await asyncio.sleep(3.0)
+                        waited = self.hass.loop.time() - wait_start
+                        if waited < max_wait_sec:
+                            _LOGGER.debug(
+                                "Movement: waiting for persistent connection (%.0fs)",
+                                max_wait_sec - waited,
+                            )
+                            await asyncio.sleep(min(3.0, max_wait_sec - waited))
                             continue
-                        _LOGGER.warning("Movement: no persistent connection")
+                        _LOGGER.warning("Movement: no persistent connection after %.0fs wait", max_wait_sec)
                         return False
                 try:
                     auth_cmd = self._get_auth_command()
@@ -1135,7 +1149,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     start_feet = self._feet_position
                     head_cal_sec = self.head_calibration_ms / 1000.0
                     feet_cal_sec = self.feet_calibration_ms / 1000.0
+                    last_keep_alive = start_time
                     while self.hass.loop.time() < end_ts:
+                        now = self.hass.loop.time()
+                        if now - last_keep_alive >= KEEP_ALIVE_INTERVAL_SEC:
+                            await _write_gatt_char_flexible(
+                                client, self._get_auth_command(), response=False
+                            )
+                            await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                            last_keep_alive = now
                         await _write_gatt_char_flexible(client, command, response=False)
                         now = self.hass.loop.time()
                         elapsed = now - start_time
@@ -1310,7 +1332,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if at_extreme:
                     await _write_gatt_char_flexible(client, CMD_STOP, response=False)
                     await asyncio.sleep(0.1)
+                last_keep_alive = self.hass.loop.time()
                 while not stop_event.is_set():
+                    now = self.hass.loop.time()
+                    if now - last_keep_alive >= KEEP_ALIVE_INTERVAL_SEC:
+                        await _write_gatt_char_flexible(
+                            client, self._get_auth_command(), response=False
+                        )
+                        await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
+                        last_keep_alive = now
                     await _write_gatt_char_flexible(
                         client, command, response=False
                     )
@@ -1496,9 +1526,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if head_start > 0.5:
                 duration_ms = int((head_start / 100.0) * self._head_calibration_ms)
                 duration_ms = max(300, duration_ms)
-                await self.async_run_movement_for_duration(
+                ok = await self.async_run_movement_for_duration(
                     CMD_HEAD_DOWN, duration_ms / 1000.0
                 )
+                if not ok:
+                    _LOGGER.warning("Move to zero (head) failed, retrying after 5s for connection")
+                    await asyncio.sleep(5.0)
+                    await self.async_run_movement_for_duration(
+                        CMD_HEAD_DOWN, duration_ms / 1000.0
+                    )
             self.set_head_position(0.0)
             if move_feet:
                 await asyncio.sleep(0.5)
@@ -1507,9 +1543,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if feet_start > 0.5:
                 duration_ms = int((feet_start / 100.0) * self._feet_calibration_ms)
                 duration_ms = max(300, duration_ms)
-                await self.async_run_movement_for_duration(
+                ok = await self.async_run_movement_for_duration(
                     CMD_FEET_DOWN, duration_ms / 1000.0
                 )
+                if not ok:
+                    _LOGGER.warning("Move to zero (feet) failed, retrying after 5s for connection")
+                    await asyncio.sleep(5.0)
+                    await self.async_run_movement_for_duration(
+                        CMD_FEET_DOWN, duration_ms / 1000.0
+                    )
             self.set_feet_position(0.0)
         _LOGGER.info("Move to zero complete")
 
