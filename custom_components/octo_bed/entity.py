@@ -30,10 +30,7 @@ class OctoBedEntity(CoordinatorEntity[OctoBedCoordinator], Entity):
 
     @property
     def available(self) -> bool:
-        # Stay available during movement/calibration even if BLE check would fail
-        # (proxy may report device as unavailable while connection is held)
-        if self.coordinator.device_address is None:
-            return False
-        if self.coordinator.movement_active or self.coordinator.calibration_active:
-            return True
-        return super().available
+        # Never show unavailable when we have a device address – bed must not "disconnect" from addon.
+        # BLE/proxy can report device as unavailable briefly after we close a connection (e.g. at 100%);
+        # that is not a real disconnect and should not make entities unavailable.
+        return self.coordinator.device_address is not None
