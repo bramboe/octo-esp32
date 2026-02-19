@@ -17,7 +17,6 @@ from .const import (
     BLE_CHAR_UUID,
     CMD_APP_INIT,
     CONF_DEVICE_ADDRESS,
-    COOLDOWN_AFTER_MOVEMENT_SEC,
     DELAY_AFTER_CONNECT_CALIBRATION_SEC,
     DELAY_AFTER_CONNECT_MOVEMENT_SEC,
     DELAY_AFTER_CONNECT_SEC,
@@ -578,13 +577,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await asyncio.sleep(KEEP_ALIVE_INTERVAL_SEC)
                     if self._connection_stop.is_set():
                         break
-                    if self._movement_active or self._calibration_active or self._calibration_stopping:
-                        continue
-                    # Skip keep-alive briefly after movement (device needs recovery time, like official app)
-                    if self._last_movement_end_time:
-                        elapsed = self.hass.loop.time() - self._last_movement_end_time
-                        if elapsed < COOLDOWN_AFTER_MOVEMENT_SEC:
-                            continue
+                    # App sends keep-alive every 30s regardless of activity (idle, movement, light)
                     async with self._client_lock:
                         if self._client is client and client.is_connected:
                             try:
