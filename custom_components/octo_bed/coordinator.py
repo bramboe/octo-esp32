@@ -20,7 +20,6 @@ from .const import (
     DELAY_AFTER_CONNECT_CALIBRATION_SEC,
     DELAY_AFTER_CONNECT_MOVEMENT_SEC,
     DELAY_AFTER_CONNECT_SEC,
-    DELAY_AFTER_STOP_SAME_CONN_SEC,
     DOMAIN,
     CONF_DEVICE_NICKNAME,
     CONNECT_TIMEOUT,
@@ -39,7 +38,6 @@ from .const import (
     DEFAULT_FEET_CALIBRATION_SEC,
     DEFAULT_HEAD_CALIBRATION_SEC,
     KEEP_ALIVE_DELAY_SEC,
-    KEEP_ALIVE_ACTIVE_MOVEMENT_SEC,
     KEEP_ALIVE_INTERVAL_SEC,
     KEEP_ALIVE_PREFIX,
     KEEP_ALIVE_SUFFIX,
@@ -856,12 +854,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 disconnected_callback=None,
                 timeout=CONNECT_TIMEOUT,
             )
-            await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
+            await asyncio.sleep(DELAY_AFTER_CONNECT_MOVEMENT_SEC)
             await _write_gatt_char_flexible(
                 client, self._get_auth_command(), response=False
             )
             await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
-            last_keep_alive = self.hass.loop.time()
             while not is_cancelled():
                 elapsed = self.hass.loop.time() - start_time
                 if command in (CMD_HEAD_UP, CMD_FEET_UP, CMD_BOTH_UP):
@@ -911,12 +908,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         hit_limit = True
                         break
                 await _write_gatt_char_flexible(client, command, response=False)
-                now = self.hass.loop.time()
-                if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
-                    await _write_gatt_char_flexible(
-                        client, self._get_auth_command(), response=False
-                    )
-                    last_keep_alive = now
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
@@ -940,8 +931,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self, command: bytes, duration_sec: float, target_pct: float | None = None
     ) -> bool:
         """Run movement until duration elapsed or target_pct reached (0/100/limit).
-        Connect, send stop, then send movement command every 300ms. No pre-delays.
-        Stops when: duration done, target reached, or 0%/100% limit. Retries on BLE errors.
+        Connect, auth once, then send movement command every 340ms (matches official app).
+        No stop before, no keep-alive during. Stops when: duration done, target reached, or 0%/100%.
         """
         if duration_sec <= 0:
             return True
@@ -979,24 +970,16 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     auth_cmd = self._get_auth_command()
                     await _write_gatt_char_flexible(client, auth_cmd, response=False)
                     await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
-                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-                    await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
-                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-                    await asyncio.sleep(0.05)
                     start_time = self.hass.loop.time()
                     end_ts = start_time + remaining
                     start_head = self._head_position
                     start_feet = self._feet_position
                     head_cal_sec = self.head_calibration_ms / 1000.0
                     feet_cal_sec = self.feet_calibration_ms / 1000.0
-                    last_keep_alive = start_time
                     while self.hass.loop.time() < end_ts:
                         await _write_gatt_char_flexible(client, command, response=False)
                         now = self.hass.loop.time()
                         elapsed = now - start_time
-                        if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
-                            await _write_gatt_char_flexible(client, auth_cmd, response=False)
-                            last_keep_alive = now
                         if command == CMD_HEAD_UP:
                             est = start_head + (elapsed / max(0.1, head_cal_sec)) * 100.0
                             self.set_head_position(min(100.0, est), persist=False)
@@ -1196,21 +1179,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     client, self._get_auth_command(), response=False
                 )
                 await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
-                await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-                await asyncio.sleep(DELAY_AFTER_STOP_SAME_CONN_SEC)
-                await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-                await asyncio.sleep(0.1)
-                last_keep_alive = self.hass.loop.time()
                 while not stop_event.is_set():
                     await _write_gatt_char_flexible(
                         client, command, response=False
                     )
-                    now = self.hass.loop.time()
-                    if now - last_keep_alive >= KEEP_ALIVE_ACTIVE_MOVEMENT_SEC:
-                        await _write_gatt_char_flexible(
-                            client, self._get_auth_command(), response=False
-                        )
-                        last_keep_alive = now
                     await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
                 await _write_gatt_char_flexible(
                     client, CMD_STOP, response=False
