@@ -17,6 +17,7 @@ from .const import (
     BLE_CHAR_UUID,
     CMD_APP_INIT,
     CONF_DEVICE_ADDRESS,
+    COOLDOWN_AFTER_MOVEMENT_SEC,
     DELAY_AFTER_CONNECT_CALIBRATION_SEC,
     DELAY_AFTER_CONNECT_MOVEMENT_SEC,
     DELAY_AFTER_CONNECT_SEC,
@@ -24,7 +25,6 @@ from .const import (
     CONF_DEVICE_NICKNAME,
     CONNECT_TIMEOUT,
     CONNECTION_HOLD_AFTER_MOVEMENT_SEC,
-    COOLDOWN_AFTER_MOVEMENT_SEC,
     CMD_BOTH_DOWN,
     CMD_BOTH_UP,
     CMD_FEET_DOWN,
@@ -580,6 +580,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         break
                     if self._movement_active or self._calibration_active:
                         continue
+                    # Skip keep-alive briefly after movement (device needs recovery time, like official app)
+                    if self._last_movement_end_time:
+                        elapsed = self.hass.loop.time() - self._last_movement_end_time
+                        if elapsed < COOLDOWN_AFTER_MOVEMENT_SEC:
+                            continue
                     async with self._client_lock:
                         if self._client is client and client.is_connected:
                             try:
@@ -587,8 +592,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 await _write_gatt_char_flexible(client, auth_cmd, response=False)
                                 _LOGGER.debug("Keep-alive sent to %s", addr)
                             except Exception as e:
-                                _LOGGER.debug("Keep-alive write failed: %s", e)
-                                break
+                                _LOGGER.debug("Keep-alive write failed (will retry): %s", e)
+                                # Don't break – transient failure; only exit when client.is_connected is False
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -1369,9 +1374,26 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass, self._calibration_notification_id()
         )
 
+    async def _wait_for_connection(self, timeout_sec: float = 30.0) -> bool:
+        """Wait for persistent connection before calibration/movement. Returns True if connected."""
+        for _ in range(int(timeout_sec)):
+            if self._is_client_connected():
+                return True
+            await asyncio.sleep(1.0)
+        _LOGGER.warning("No connection after %.0fs – ensure bed is on and in range of Bluetooth proxy", timeout_sec)
+        persistent_notification.async_create(
+            self.hass,
+            "Octo Bed is not connected. Ensure the bed is on and in range of the Bluetooth proxy, then try again.",
+            title="Calibration not started",
+            notification_id=f"octo_bed_no_connection_{self._entry.entry_id}",
+        )
+        return False
+
     async def async_start_calibration_head(self) -> bool:
         """Start head calibration (move head up until user stops). Returns True if started."""
         if self._calibration_task and not self._calibration_task.done():
+            return False
+        if not await self._wait_for_connection():
             return False
         await self.async_send_stop()
         await asyncio.sleep(1.0)
@@ -1390,6 +1412,8 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_start_calibration_feet(self) -> bool:
         """Start feet calibration (move feet up until user stops). Returns True if started."""
         if self._calibration_task and not self._calibration_task.done():
+            return False
+        if not await self._wait_for_connection():
             return False
         await self.async_send_stop()
         await asyncio.sleep(1.0)
