@@ -70,6 +70,7 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         return int(round(self.coordinator.head_position))
 
     async def async_open_cover(self, **kwargs: Any) -> None:
+        _LOGGER.debug("Head cover: open (100%%)")
         self._cancel_debounce()
         self._movement_task = self.hass.async_create_task(
             self._run_to_position(100.0, is_head=True)
@@ -77,6 +78,7 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         self.coordinator.set_active_cover_task(self._movement_task)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
+        _LOGGER.debug("Head cover: close (0%%)")
         self._cancel_debounce()
         self._movement_task = self.hass.async_create_task(
             self._run_to_position(0.0, is_head=True)
@@ -84,6 +86,7 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         self.coordinator.set_active_cover_task(self._movement_task)
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
+        _LOGGER.debug("Head cover: stop")
         self._cancel_debounce()
         if self._movement_task and not self._movement_task.done():
             self._movement_task.cancel()
@@ -105,6 +108,7 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         target = self._pending_target
         self._pending_target = None
         if target is not None:
+            _LOGGER.debug("Head cover: debounce fired, moving to %.0f%%", target)
             self._movement_task = self.hass.async_create_task(
                 self._run_to_position(target, is_head=True)
             )
@@ -125,6 +129,8 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
     async def _run_to_position(self, target: float, is_head: bool) -> None:
         """Run head or feet to target 0-100. No pre-delays – connect and send movement until target/limit.
         Retries once on BLE failure. Keeps movement_active=True so coordinator skips BLE checks."""
+        section = "head" if is_head else "feet"
+        _LOGGER.debug("%s: movement starting to %.0f%%", section.capitalize(), target)
         coordinator = self.coordinator
         coordinator.set_movement_active(True)
         try:
