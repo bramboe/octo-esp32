@@ -63,6 +63,7 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         super().__init__(*args, **kwargs)
         self._debounce_timer: asyncio.TimerHandle | None = None
         self._pending_target: float | None = None
+        self._movement_task: asyncio.Task[None] | None = None
 
     @property
     def current_cover_position(self) -> int | None:
@@ -70,15 +71,22 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         self._cancel_debounce()
-        await self._run_to_position(100.0, is_head=True)
+        self._movement_task = self.hass.async_create_task(
+            self._run_to_position(100.0, is_head=True)
+        )
+        self.coordinator.set_active_cover_task(self._movement_task)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
         self._cancel_debounce()
-        await self._run_to_position(0.0, is_head=True)
+        self._movement_task = self.hass.async_create_task(
+            self._run_to_position(0.0, is_head=True)
+        )
+        self.coordinator.set_active_cover_task(self._movement_task)
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
         self._cancel_debounce()
-        await self.coordinator.async_send_stop()
+        if self._movement_task and not self._movement_task.done():
+            self._movement_task.cancel()
         self.coordinator.set_movement_active(False)
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
@@ -97,13 +105,18 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
         target = self._pending_target
         self._pending_target = None
         if target is not None:
-            self.hass.async_create_task(self._run_to_position(target, is_head=True))
+            self._movement_task = self.hass.async_create_task(
+                self._run_to_position(target, is_head=True)
+            )
+            self.coordinator.set_active_cover_task(self._movement_task)
 
     def _cancel_debounce(self) -> None:
         if self._debounce_timer:
             self._debounce_timer.cancel()
             self._debounce_timer = None
         self._pending_target = None
+        if self._movement_task and not self._movement_task.done():
+            self._movement_task.cancel()
 
     async def async_will_remove_from_hass(self) -> None:
         self._cancel_debounce()
@@ -133,7 +146,7 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
                 duration_ms = max(300, min(cal_ms, duration_ms))
                 duration_sec = duration_ms / 1000.0
                 ok = await coordinator.async_run_movement_for_duration(
-                    command, duration_sec, target_pct=target
+                    command, duration_sec
                 )
                 if ok:
                     set_pos(target)
@@ -142,6 +155,8 @@ class OctoBedHeadCoverEntity(OctoBedCoverEntity):
                     await asyncio.sleep(0.5)
             self.async_write_ha_state()
         finally:
+            self._movement_task = None
+            coordinator.set_active_cover_task(None)
             coordinator.set_movement_active(False)
 
 
@@ -155,6 +170,7 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
         super().__init__(*args, **kwargs)
         self._debounce_timer: asyncio.TimerHandle | None = None
         self._pending_target: float | None = None
+        self._movement_task: asyncio.Task[None] | None = None
 
     @property
     def current_cover_position(self) -> int | None:
@@ -162,15 +178,22 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         self._cancel_debounce()
-        await self._run_to_position(100.0, is_head=False)
+        self._movement_task = self.hass.async_create_task(
+            self._run_to_position(100.0, is_head=False)
+        )
+        self.coordinator.set_active_cover_task(self._movement_task)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
         self._cancel_debounce()
-        await self._run_to_position(0.0, is_head=False)
+        self._movement_task = self.hass.async_create_task(
+            self._run_to_position(0.0, is_head=False)
+        )
+        self.coordinator.set_active_cover_task(self._movement_task)
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
         self._cancel_debounce()
-        await self.coordinator.async_send_stop()
+        if self._movement_task and not self._movement_task.done():
+            self._movement_task.cancel()
         self.coordinator.set_movement_active(False)
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
@@ -189,13 +212,18 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
         target = self._pending_target
         self._pending_target = None
         if target is not None:
-            self.hass.async_create_task(self._run_to_position(target, is_head=False))
+            self._movement_task = self.hass.async_create_task(
+                self._run_to_position(target, is_head=False)
+            )
+            self.coordinator.set_active_cover_task(self._movement_task)
 
     def _cancel_debounce(self) -> None:
         if self._debounce_timer:
             self._debounce_timer.cancel()
             self._debounce_timer = None
         self._pending_target = None
+        if self._movement_task and not self._movement_task.done():
+            self._movement_task.cancel()
 
     async def async_will_remove_from_hass(self) -> None:
         self._cancel_debounce()
@@ -218,7 +246,7 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
                 duration_sec = duration_ms / 1000.0
                 command = CMD_FEET_UP if target > current else CMD_FEET_DOWN
                 ok = await coordinator.async_run_movement_for_duration(
-                    command, duration_sec, target_pct=target
+                    command, duration_sec
                 )
                 if ok:
                     coordinator.set_feet_position(target)
@@ -227,6 +255,8 @@ class OctoBedFeetCoverEntity(OctoBedCoverEntity):
                     await asyncio.sleep(0.5)
             self.async_write_ha_state()
         finally:
+            self._movement_task = None
+            coordinator.set_active_cover_task(None)
             coordinator.set_movement_active(False)
 
 
@@ -240,6 +270,7 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
         super().__init__(*args, **kwargs)
         self._debounce_timer: asyncio.TimerHandle | None = None
         self._pending_target: float | None = None
+        self._movement_task: asyncio.Task[None] | None = None
 
     @property
     def current_cover_position(self) -> int | None:
@@ -249,15 +280,22 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         self._cancel_debounce()
-        await self._run_both_to_position(100.0)
+        self._movement_task = self.hass.async_create_task(
+            self._run_both_to_position(100.0)
+        )
+        self.coordinator.set_active_cover_task(self._movement_task)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
         self._cancel_debounce()
-        await self._run_both_to_position(0.0)
+        self._movement_task = self.hass.async_create_task(
+            self._run_both_to_position(0.0)
+        )
+        self.coordinator.set_active_cover_task(self._movement_task)
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
         self._cancel_debounce()
-        await self.coordinator.async_send_stop()
+        if self._movement_task and not self._movement_task.done():
+            self._movement_task.cancel()
         self.coordinator.set_movement_active(False)
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
@@ -276,13 +314,18 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
         target = self._pending_target
         self._pending_target = None
         if target is not None:
-            self.hass.async_create_task(self._run_both_to_position(target))
+            self._movement_task = self.hass.async_create_task(
+                self._run_both_to_position(target)
+            )
+            self.coordinator.set_active_cover_task(self._movement_task)
 
     def _cancel_debounce(self) -> None:
         if self._debounce_timer:
             self._debounce_timer.cancel()
             self._debounce_timer = None
         self._pending_target = None
+        if self._movement_task and not self._movement_task.done():
+            self._movement_task.cancel()
 
     async def async_will_remove_from_hass(self) -> None:
         self._cancel_debounce()
@@ -308,7 +351,7 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
                 if target > head_current and target > feet_current:
                     phase1 = min(head_duration_sec, feet_duration_sec)
                     ok = await coordinator.async_run_movement_for_duration(
-                        CMD_BOTH_UP, phase1, target_pct=target
+                        CMD_BOTH_UP, phase1
                     )
                     if not ok:
                         all_ok = False
@@ -318,12 +361,12 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
                         if head_remaining > 0.1:
                             await asyncio.sleep(0.5)
                             ok = await coordinator.async_run_movement_for_duration(
-                                CMD_HEAD_UP, head_remaining, target_pct=target
+                                CMD_HEAD_UP, head_remaining
                             )
                         elif feet_remaining > 0.1:
                             await asyncio.sleep(0.5)
                             ok = await coordinator.async_run_movement_for_duration(
-                                CMD_FEET_UP, feet_remaining, target_pct=target
+                                CMD_FEET_UP, feet_remaining
                             )
                         else:
                             ok = True
@@ -335,7 +378,7 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
                 elif target < head_current and target < feet_current:
                     phase1 = min(head_duration_sec, feet_duration_sec)
                     ok = await coordinator.async_run_movement_for_duration(
-                        CMD_BOTH_DOWN, phase1, target_pct=target
+                        CMD_BOTH_DOWN, phase1
                     )
                     if not ok:
                         all_ok = False
@@ -345,12 +388,12 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
                         if head_remaining > 0.1:
                             await asyncio.sleep(0.5)
                             ok = await coordinator.async_run_movement_for_duration(
-                                CMD_HEAD_DOWN, head_remaining, target_pct=target
+                                CMD_HEAD_DOWN, head_remaining
                             )
                         elif feet_remaining > 0.1:
                             await asyncio.sleep(0.5)
                             ok = await coordinator.async_run_movement_for_duration(
-                                CMD_FEET_DOWN, feet_remaining, target_pct=target
+                                CMD_FEET_DOWN, feet_remaining
                             )
                         else:
                             ok = True
@@ -363,7 +406,7 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
                     if head_diff >= 0.5:
                         cmd = CMD_HEAD_UP if target > head_current else CMD_HEAD_DOWN
                         head_ok = await coordinator.async_run_movement_for_duration(
-                            cmd, head_duration_sec, target_pct=target
+                            cmd, head_duration_sec
                         )
                     else:
                         head_ok = True
@@ -371,7 +414,7 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
                         await asyncio.sleep(0.5)
                         cmd = CMD_FEET_UP if target > feet_current else CMD_FEET_DOWN
                         feet_ok = await coordinator.async_run_movement_for_duration(
-                            cmd, feet_duration_sec, target_pct=target
+                            cmd, feet_duration_sec
                         )
                     else:
                         feet_ok = True
@@ -386,6 +429,8 @@ class OctoBedBothCoverEntity(OctoBedCoverEntity):
                     await asyncio.sleep(0.5)
             self.async_write_ha_state()
         finally:
+            self._movement_task = None
+            coordinator.set_active_cover_task(None)
             coordinator.set_movement_active(False)
 
 
