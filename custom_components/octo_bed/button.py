@@ -89,7 +89,7 @@ class OctoBedResetBleButton(OctoBedEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         self.coordinator.reset_ble_connection()
-        await self.coordinator.async_config_entry_first_refresh()
+        await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
 
