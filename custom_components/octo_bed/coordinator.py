@@ -549,14 +549,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await asyncio.sleep(10.0)
                 continue
             ble_device = self._get_ble_device()
-            if not ble_device and addr:
-                _LOGGER.debug("Device %s not in proxy cache, waiting up to 30s", addr)
-                ble_device = await _wait_for_ble_device(self.hass, addr, max_sec=30.0)
             if not ble_device:
-                _LOGGER.warning(
-                    "Octo Bed: device %s not seen by Bluetooth proxy. Ensure bed/remote is on and in range.",
-                    addr,
-                )
                 await asyncio.sleep(reconnect_delay)
                 continue
             client = None
@@ -570,15 +563,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     timeout=CONNECT_TIMEOUT,
                     use_services_cache=False,
                     ble_device_callback=self._get_ble_device_for_reconnect,
-                    max_attempts=3,
                 )
                 await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
                 if not await self._auth_on_connect(client):
-                    _LOGGER.warning(
-                        "Octo Bed: auth failed for %s (check PIN). Retrying in %.0fs.",
-                        addr,
-                        reconnect_delay,
-                    )
                     await _safe_disconnect(client)
                     await asyncio.sleep(reconnect_delay)
                     continue
@@ -605,7 +592,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                _LOGGER.warning("Octo Bed: connection failed for %s: %s", addr, e)
+                _LOGGER.debug("Connection loop error: %s", e)
             finally:
                 async with self._client_lock:
                     if self._client is client:
@@ -1293,27 +1280,37 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self._get_ble_device()
 
     async def _calibration_loop(self, head: bool) -> None:
-        """Same as Head Up / Feet Up: use persistent connection, send CMD_HEAD_UP or CMD_FEET_UP every 340ms until stop.
-        Uses persistent connection – no disconnect (bed stays connected).
+        """Same as Head Up / Feet Up switch: keep-alive, then CMD_HEAD_UP or CMD_FEET_UP every 300ms until stop.
+        Reconnects on BLE error so calibration continues until user presses stop.
+        Uses fresh device ref and service cache disabled for stable proxy reconnects.
         """
         command = CMD_HEAD_UP if head else CMD_FEET_UP
         stop_event = self._calibration_stop_event
         if not stop_event:
             return
         section = "head" if head else "feet"
-        for attempt in range(10):
-            if stop_event.is_set():
+        while not stop_event.is_set():
+            ble_device = self._get_ble_device()
+            if not ble_device and self.device_address:
+                ble_device = await _wait_for_ble_device(
+                    self.hass, self.device_address, max_sec=15.0
+                )
+            if not ble_device:
+                _LOGGER.warning("Calibration: BLE device not available, stopping")
                 return
-            async with self._client_lock:
-                client = self._client
-                if not client or not getattr(client, "is_connected", False):
-                    if attempt == 0:
-                        _LOGGER.debug("Calibration: waiting for persistent connection")
-                        await asyncio.sleep(3.0)
-                        continue
-                    _LOGGER.warning("Calibration: no persistent connection, stopping")
-                    return
+            client = None
             try:
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    self._device_name or "Octo Bed",
+                    disconnected_callback=None,
+                    timeout=CONNECT_TIMEOUT,
+                    max_attempts=3,
+                    use_services_cache=False,
+                    ble_device_callback=self._get_ble_device_for_reconnect,
+                )
+                await asyncio.sleep(DELAY_AFTER_CONNECT_CALIBRATION_SEC)
                 await _write_gatt_char_flexible(
                     client, self._get_auth_command(), response=False
                 )
@@ -1330,16 +1327,19 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         client, command, response=False
                     )
                     await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
-                return
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 _LOGGER.warning(
-                    "Calibration %s BLE error (retrying): %s", section, e
+                    "Calibration %s BLE error (reconnecting): %s", section, e
                 )
                 if stop_event.is_set():
-                    return
-                await asyncio.sleep(0.5)
+                    break
+                err = str(e).lower()
+                backoff = 4.0 if "characteristic" in err and "not found" in err else 0.5
+                await asyncio.sleep(backoff)
+            finally:
+                await _safe_disconnect(client)
 
     def _calibration_notification_id(self) -> str:
         return f"octo_bed_calibration_{self._entry.entry_id}"
@@ -1363,7 +1363,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     title=title,
                     notification_id=notification_id,
                 )
-                # Push updated data every second so sensor shows 1, 2, 3... (not 10, 20, 30)
+                # Push data every second so Calibration elapsed sensor shows 1, 2, 3, 4...
                 self.async_set_updated_data(self._data())
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
