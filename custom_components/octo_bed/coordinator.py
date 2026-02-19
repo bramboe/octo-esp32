@@ -197,6 +197,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._calibration_stop_event: asyncio.Event | None = None
         self._calibration_notification_task: asyncio.Task[None] | None = None
         self._calibration_stopping = False
+        self._active_cover_task: asyncio.Task[Any] | None = None
         # Test scan: send pattern-based system commands with delay; Stop test scan cancels it
         self._test_scan_task: asyncio.Task[None] | None = None
         self._test_scan_stop: asyncio.Event | None = None
@@ -282,6 +283,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def set_movement_active(self, value: bool) -> None:
         self._movement_active = value
+
+    def set_active_cover_task(self, task: asyncio.Task[Any] | None) -> None:
+        self._active_cover_task = task
+
+    def cancel_active_cover_task(self) -> None:
+        if self._active_cover_task and not self._active_cover_task.done():
+            self._active_cover_task.cancel()
+        self._active_cover_task = None
+        self._movement_active = False
 
     def set_calibration(self, head_sec: float | None = None, feet_sec: float | None = None) -> None:
         if head_sec is not None:
@@ -909,17 +919,12 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         break
                 await _write_gatt_char_flexible(client, command, response=False)
                 await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
-            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-            await asyncio.sleep(0.1)
-            await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             if hit_limit:
                 self.async_set_updated_data(self._data())
         except asyncio.CancelledError:
-            await self._send_command(CMD_STOP)
             raise
         except Exception as e:
             _LOGGER.warning("Movement loop BLE error: %s", e)
-            await self._send_command(CMD_STOP)
         finally:
             await _safe_disconnect(client)
             self.set_movement_active(False)
@@ -928,11 +933,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return (duration, hit_limit)
 
     async def async_run_movement_for_duration(
-        self, command: bytes, duration_sec: float, target_pct: float | None = None
+        self, command: bytes, duration_sec: float
     ) -> bool:
-        """Run movement until duration elapsed or target_pct reached (0/100/limit).
-        Connect, auth once, then send movement command every 340ms (matches official app).
-        No stop before, no keep-alive during. Stops when: duration done, target reached, or 0%/100%.
+        """Run movement for duration_sec – send movement command every 340ms, no CMD_STOP.
+        Connect, auth once, then send movement until duration elapsed. Just stop sending when done.
         """
         if duration_sec <= 0:
             return True
@@ -1004,20 +1008,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             est = start_head - delta
                             self.set_head_position(max(0.0, start_head - delta), persist=False)
                             self.set_feet_position(max(0.0, start_feet - delta), persist=False)
-                        if command in (CMD_HEAD_UP, CMD_FEET_UP, CMD_BOTH_UP):
-                            if est >= 99.0:
-                                break
-                            if target_pct is not None and est >= target_pct - 1.0:
-                                break
-                        else:
-                            if est <= 1.0:
-                                break
-                            if target_pct is not None and est <= target_pct + 1.0:
-                                break
                         await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
-                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
-                    await asyncio.sleep(0.1)
-                    await _write_gatt_char_flexible(client, CMD_STOP, response=False)
                     return True
                 except Exception as e:
                     await _safe_disconnect(client)
@@ -1043,11 +1034,9 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         ble_device = self._get_ble_device()
                         if not ble_device:
                             _LOGGER.warning("Movement: no BLE device for retry")
-                            await self._send_command(CMD_STOP)
                             return False
                         continue
                     _LOGGER.warning("Movement-for-duration BLE error: %s", e)
-                    await self._send_command(CMD_STOP)
                     return False
         finally:
             await _safe_disconnect(client)
@@ -1184,30 +1173,12 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         client, command, response=False
                     )
                     await asyncio.sleep(MOVEMENT_COMMAND_INTERVAL_SEC)
-                await _write_gatt_char_flexible(
-                    client, CMD_STOP, response=False
-                )
-                await asyncio.sleep(0.1)
-                await _write_gatt_char_flexible(
-                    client, CMD_STOP, response=False
-                )
             except asyncio.CancelledError:
-                if client:
-                    try:
-                        await _write_gatt_char_flexible(
-                            client, CMD_STOP, response=False
-                        )
-                    except Exception:
-                        pass
                 raise
             except Exception as e:
                 _LOGGER.warning(
                     "Calibration %s BLE error (reconnecting): %s", section, e
                 )
-                try:
-                    await self._send_command(CMD_STOP)
-                except Exception:
-                    pass
                 if stop_event.is_set():
                     break
                 err = str(e).lower()
@@ -1215,7 +1186,6 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await asyncio.sleep(backoff)
             finally:
                 await _safe_disconnect(client)
-        await self._send_command(CMD_STOP)
 
     def _calibration_notification_id(self) -> str:
         return f"octo_bed_calibration_{self._entry.entry_id}"
