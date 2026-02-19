@@ -106,7 +106,6 @@ class OctoBedCalibrationElapsedSensor(OctoBedEntity, SensorEntity):
     _attr_name = "Calibration elapsed"
     _attr_unique_id = "calibration_elapsed"
     _attr_icon = "mdi:timer-outline"
-    _attr_native_unit_of_measurement = "s"
 
     @property
     def native_value(self) -> str | int:
@@ -115,6 +114,12 @@ class OctoBedCalibrationElapsedSensor(OctoBedEntity, SensorEntity):
             return "—"
         sec = data.get("calibration_elapsed_sec", 0)
         return int(sec) if isinstance(sec, (int, float)) else 0
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        """Only show unit when calibrating (numeric value)."""
+        data = self.coordinator.data or {}
+        return "s" if data.get("calibration_active") else None
 
     @property
     def extra_state_attributes(self) -> dict[str, str | float]:
