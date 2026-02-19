@@ -574,11 +574,11 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 reconnect_delay = 5.0
                 self.async_set_updated_data(self._data())
                 _LOGGER.info("Persistent connection established to %s", addr)
-                while not self._connection_stop.is_set() and client.is_connected:
+                while not self._connection_stop.is_set() and getattr(client, "is_connected", False):
                     await asyncio.sleep(KEEP_ALIVE_INTERVAL_SEC)
                     if self._connection_stop.is_set():
                         break
-                    if self._movement_active or self._calibration_active:
+                    if self._movement_active or self._calibration_active or self._calibration_stopping:
                         continue
                     # Skip keep-alive briefly after movement (device needs recovery time, like official app)
                     if self._last_movement_end_time:
@@ -1460,7 +1460,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         pass
                 self._calibration_task = None
             await self.async_send_stop()
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.5)
             head_sec = feet_sec = None
             duration_ms = int((self.hass.loop.time() - self._calibration_start_time) * 1000)
             duration_ms = max(1000, min(120000, duration_ms))
