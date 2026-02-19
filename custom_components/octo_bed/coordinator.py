@@ -549,7 +549,14 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await asyncio.sleep(10.0)
                 continue
             ble_device = self._get_ble_device()
+            if not ble_device and addr:
+                _LOGGER.debug("Device %s not in proxy cache, waiting up to 30s", addr)
+                ble_device = await _wait_for_ble_device(self.hass, addr, max_sec=30.0)
             if not ble_device:
+                _LOGGER.warning(
+                    "Octo Bed: device %s not seen by Bluetooth proxy. Ensure bed/remote is on and in range.",
+                    addr,
+                )
                 await asyncio.sleep(reconnect_delay)
                 continue
             client = None
@@ -563,9 +570,15 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     timeout=CONNECT_TIMEOUT,
                     use_services_cache=False,
                     ble_device_callback=self._get_ble_device_for_reconnect,
+                    max_attempts=3,
                 )
                 await asyncio.sleep(DELAY_AFTER_CONNECT_SEC)
                 if not await self._auth_on_connect(client):
+                    _LOGGER.warning(
+                        "Octo Bed: auth failed for %s (check PIN). Retrying in %.0fs.",
+                        addr,
+                        reconnect_delay,
+                    )
                     await _safe_disconnect(client)
                     await asyncio.sleep(reconnect_delay)
                     continue
@@ -592,7 +605,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                _LOGGER.debug("Connection loop error: %s", e)
+                _LOGGER.warning("Octo Bed: connection failed for %s: %s", addr, e)
             finally:
                 async with self._client_lock:
                     if self._client is client:
