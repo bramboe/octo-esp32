@@ -598,8 +598,10 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if self._client is client:
                         self._client = None
                 self._authenticated = False
+                _LOGGER.debug("Persistent connection lost, disconnecting")
                 await _safe_disconnect(client)
                 self.async_set_updated_data(self._data())
+            _LOGGER.debug("Reconnecting in %.0fs", reconnect_delay)
             await asyncio.sleep(reconnect_delay)
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -607,7 +609,14 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         addr = self.device_address
         if not addr:
             await self._async_ensure_address()
-        return self._data()
+        data = self._data()
+        _LOGGER.debug(
+            "Coordinator refresh: addr=%s status=%s connected=%s",
+            addr or "none",
+            data.get("connection_status"),
+            data.get("connected"),
+        )
+        return data
 
     async def _async_ensure_address(self) -> None:
         """Resolve device address from config or discovery."""
@@ -698,6 +707,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await _write_gatt_char_flexible(client, auth_cmd, response=False)
                     await asyncio.sleep(KEEP_ALIVE_DELAY_SEC)
                 await _write_gatt_char_flexible(client, data, response=False)
+                _LOGGER.debug("Command sent: %s", data.hex())
                 return True
             except Exception as e:
                 if attempt == 0:
@@ -767,6 +777,7 @@ class OctoBedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
             await asyncio.sleep(0.1)
             await _write_gatt_char_flexible(client, CMD_STOP, response=False)
+            _LOGGER.debug("Stop command sent (2x)")
             return True
         except Exception as e:
             _LOGGER.debug("async_send_stop failed: %s", e)
