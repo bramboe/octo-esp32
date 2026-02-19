@@ -28,8 +28,7 @@ class OctoBedStopButton(OctoBedEntity, ButtonEntity):
     _attr_unique_id = "stop_all"
 
     async def async_press(self) -> None:
-        await self.coordinator.async_send_stop()
-        self.coordinator.set_movement_active(False)
+        self.coordinator.cancel_active_cover_task()
         self.async_write_ha_state()
 
 
