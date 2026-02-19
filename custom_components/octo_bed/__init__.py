@@ -31,6 +31,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Octo Bed from a config entry."""
+    # Enable debug logging for the whole integration (see everything in logs)
+    logging.getLogger("custom_components.octo_bed").setLevel(logging.DEBUG)
+    _LOGGER.debug("Octo Bed setup starting for entry: %s", entry.title)
+
     hass.data.setdefault(DOMAIN, {})
     coordinator = OctoBedCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
@@ -56,6 +60,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    _LOGGER.debug("Octo Bed setup complete for %s", entry.title)
     return True
 
 
@@ -66,6 +71,7 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    _LOGGER.debug("Octo Bed unloading %s", entry.title)
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
