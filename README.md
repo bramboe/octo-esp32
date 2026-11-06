@@ -52,6 +52,12 @@ From the device’s **Configure** you can change:
 - **Range:** Place the Bluetooth proxy close to the bed. If the device is not found, use **Reset BLE Connection** and ensure the bed is on and in range.
 - **Protocol:** BLE service `FFE0`, characteristic `FFE1`; same command set as the official app and the [Octo Bed ESPHome config](https://github.com/bramboe/octo-esp32).
 
+## Support
+
+If this project is useful to you, consider sponsoring my work 💙
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/bramboe) [![Donate via bunq.me](https://img.shields.io/badge/Donate-bunq.me-2E9AD0)](https://bunq.me/bramboe)
+
 ## License
 
 MIT
